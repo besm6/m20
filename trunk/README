@@ -1,0 +1,11 @@
+Cross-development systam for M-20 computer
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+The development system consists of:
+1) CC20 - C language compiler
+2) AS20 - assembler
+3) DIS20 - disassembler
+4) SIM20 - CPU simulator
+5) LIB20 - program library
+
+____________________________________________________
+Copyright (GPL) 2008 Serge Vakulenko, <serge@vak.ru>
