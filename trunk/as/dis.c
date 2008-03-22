@@ -6,25 +6,14 @@
 #include <string.h>
 #include <stdio.h>
 #include <stdarg.h>
+#include "config.h"
+#include "ieee.h"
 
-#define DATSIZE         8196	/* размер памяти в словах */
+#define DATSIZE         4096	/* размер памяти в словах */
 
 #define LINE_WORD	1	/* виды строк входного файла */
 #define LINE_ADDR	2
 #define LINE_START	3
-
-typedef unsigned long long uint64_t;
-
-typedef union {
-        double d;
-        struct {
-#ifdef WORDS_BIGENDIAN
-                unsigned left32, right32;
-#else
-                unsigned right32, left32;
-#endif
-        } u;
-} ieee_t;
 
 char *infile;
 int debug;
@@ -44,36 +33,6 @@ void uerror (char *s, ...)
 	va_end (ap);
 	fprintf (stderr, "\n");
 	exit (1);
-}
-
-/*
- * Преобразование вещественного числа в формат М-20.
- *
- * Представление чисел в IEEE 754 (double):
- *	64   63———53 52————–1
- *	знак порядок мантисса
- * Старший (53-й) бит мантиссы не хранится и всегда равен 1.
- *
- * Представление чисел в M-20:
- *	44   43—--37 36————–1
- *      знак порядок мантисса
- */
-uint64_t ieee_to_m20 (double d)
-{
-	ieee_t ieee;
-	uint64_t word, mantissa;
-	int sign, exponent;
-
-	ieee.d = d;
-	sign = (d < 0);
-	exponent = (ieee.u.left32 >> 20 & 0x7ff) - 1023;
-	mantissa = 1LL << 52 | (uint64_t) (ieee.u.left32 & 0xfffff) << 32 |
-		ieee.u.right32;
-	word = (uint64_t) sign << 43 | (uint64_t) (exponent + 1 + 64) << 36 |
-		mantissa >> (53 - 36);
-	if (mantissa & (1 << 16))
-		word |= 1;		/* Округление. */
-	return word;
 }
 
 /*
