@@ -30,7 +30,7 @@ POST_INSTALL = :
 NORMAL_UNINSTALL = :
 PRE_UNINSTALL = :
 POST_UNINSTALL = :
-bin_PROGRAMS = dis20$(EXEEXT)
+bin_PROGRAMS = dis20$(EXEEXT) as20$(EXEEXT)
 subdir = as
 DIST_COMMON = $(srcdir)/Makefile.am $(srcdir)/Makefile.in
 ACLOCAL_M4 = $(top_srcdir)/aclocal.m4
@@ -43,7 +43,10 @@ CONFIG_CLEAN_FILES =
 am__installdirs = "$(DESTDIR)$(bindir)"
 binPROGRAMS_INSTALL = $(INSTALL_PROGRAM)
 PROGRAMS = $(bin_PROGRAMS)
-am_dis20_OBJECTS = dis.$(OBJEXT)
+am_as20_OBJECTS = as.$(OBJEXT) encoding.$(OBJEXT) ieee.$(OBJEXT)
+as20_OBJECTS = $(am_as20_OBJECTS)
+as20_LDADD = $(LDADD)
+am_dis20_OBJECTS = dis.$(OBJEXT) ieee.$(OBJEXT)
 dis20_OBJECTS = $(am_dis20_OBJECTS)
 dis20_LDADD = $(LDADD)
 DEFAULT_INCLUDES = -I. -I$(top_builddir)@am__isrc@
@@ -53,8 +56,8 @@ COMPILE = $(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) \
 	$(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS)
 CCLD = $(CC)
 LINK = $(CCLD) $(AM_CFLAGS) $(CFLAGS) $(AM_LDFLAGS) $(LDFLAGS) -o $@
-SOURCES = $(dis20_SOURCES)
-DIST_SOURCES = $(dis20_SOURCES)
+SOURCES = $(as20_SOURCES) $(dis20_SOURCES)
+DIST_SOURCES = $(as20_SOURCES) $(dis20_SOURCES)
 ETAGS = etags
 CTAGS = ctags
 DISTFILES = $(DIST_COMMON) $(DIST_SOURCES) $(TEXINFOS) $(EXTRA_DIST)
@@ -143,7 +146,8 @@ sysconfdir = @sysconfdir@
 target_alias = @target_alias@
 top_builddir = @top_builddir@
 top_srcdir = @top_srcdir@
-dis20_SOURCES = dis.c
+dis20_SOURCES = dis.c ieee.c
+as20_SOURCES = as.c encoding.c ieee.c
 AM_CFLAGS = -Wall -g -O
 all: all-am
 
@@ -201,6 +205,9 @@ uninstall-binPROGRAMS:
 
 clean-binPROGRAMS:
 	-test -z "$(bin_PROGRAMS)" || rm -f $(bin_PROGRAMS)
+as20$(EXEEXT): $(as20_OBJECTS) $(as20_DEPENDENCIES) 
+	@rm -f as20$(EXEEXT)
+	$(LINK) $(as20_OBJECTS) $(as20_LDADD) $(LIBS)
 dis20$(EXEEXT): $(dis20_OBJECTS) $(dis20_DEPENDENCIES) 
 	@rm -f dis20$(EXEEXT)
 	$(LINK) $(dis20_OBJECTS) $(dis20_LDADD) $(LIBS)
@@ -211,7 +218,10 @@ mostlyclean-compile:
 distclean-compile:
 	-rm -f *.tab.c
 
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/as.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/dis.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/encoding.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/ieee.Po@am__quote@
 
 .c.o:
 @am__fastdepCC_TRUE@	$(COMPILE) -MT $@ -MD -MP -MF $(DEPDIR)/$*.Tpo -c -o $@ $<
