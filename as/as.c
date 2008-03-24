@@ -581,7 +581,7 @@ int getterm ()
 	case '.':
 		intval = count;
 		return TTEXT;
-	case '$':
+	case '@':
 		extflag |= RRA;
 		intval = 0;
 		return TABS;
