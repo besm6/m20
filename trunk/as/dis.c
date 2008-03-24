@@ -141,7 +141,7 @@ void print (int addr, uint64_t cmd)
 	char *m;
 	int flags, op, a1, a2, a3;
 
-	flags = cmd >> 42;
+	flags = cmd >> 42 & 7;
 	op = cmd >> 36 & 077;
 	a1 = cmd >> 24 & 07777;
 	a2 = cmd >> 12 & 07777;
@@ -178,7 +178,7 @@ void print (int addr, uint64_t cmd)
 	case 047: m = "счмр";   break;	/* Выдача младших разрядов произведения */
 
 	/* Логические операции */
-	case 000: m = "п";    break;	/* Пересылка */
+	case 000: m = "зп";   break;	/* Пересылка */
 	case 020: m = "счкр"; break;	/* Выборка из регистра КЗУ (чтение пультовых тумблеров) */
 	case 013: m = "слк";  break;	/* Сложение команд */
 	case 033: m = "вчк";  break;	/* Вычитание команд */
