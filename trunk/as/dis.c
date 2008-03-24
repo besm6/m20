@@ -125,12 +125,24 @@ void print_addr (int a, int flag)
 
 	p = buf;
 	if (flag)
-		*p++ = '$';
-	if (a)
-		sprintf (p, "%#o", a);
-	else
+		*p++ = '@';
+	if (flag && a >= 07700) {
+		*p++ = '-';
+		a = (a ^ 07777) + 1;
+		if (a > 7)
+			sprintf (p, "%#o", a);
+		else
+			sprintf (p, "%o", a);
+	} else if (a) {
+		if (flag)
+			*p++ = '+';
+		if (a > 7)
+			sprintf (p, "%#o", a);
+		else
+			sprintf (p, "%o", a);
+	} else
 		*p = 0;
-	printf ("%6s", buf);
+	printf ("%7s", buf);
 }
 
 /*
