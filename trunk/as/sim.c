@@ -17,8 +17,11 @@
 #define LINE_ADDR	2
 #define LINE_START	3
 
-#define TAG		0400000000000000LL	/* 45-й бит-признак */
-#define SIGN		0200000000000000LL	/* 44-й бит-знак */
+#define BIT46		01000000000000000LL	/* 46-й бит */
+#define TAG		00400000000000000LL	/* 45-й бит-признак */
+#define SIGN		00200000000000000LL	/* 44-й бит-знак */
+#define BIT37		00001000000000000LL	/* 37-й бит */
+#define MANTISSA	00000777777777777LL	/* биты 36..1 */
 
 int debug;
 char *infile;
@@ -227,7 +230,7 @@ uint64_t normalize (uint64_t x)
 	uint64_t m;
 
 	exp = x >> 36 & 0177;
-	m = x & 0777777777777LL;
+	m = x & MANTISSA;
 	if (m == 0) {
 zero:		/* Нулевая мантисса, превращаем в ноль. */
 		return x & TAG;
@@ -281,8 +284,8 @@ zero_y:		if (! no_norm)
 		goto zero_y;
 	}
 	/* Извлечем мантиссу чисел. */
-	xm = x & 0777777777777LL;
-	ym = (y & 0777777777777LL) >> (xexp - yexp);
+	xm = x & MANTISSA;
+	ym = (y & MANTISSA) >> (xexp - yexp);
 
 	/* Сложим. */
 	rexp = xexp;
@@ -315,6 +318,23 @@ zero_y:		if (! no_norm)
 	if (! no_norm)
 		r = normalize (r);
 	return r | ((x | y) & TAG);
+}
+
+/*
+ * Коррекция порядка.
+ */
+uint64_t add_exponent (uint64_t x, int n)
+{
+	int exp;
+
+	exp = (int) (x >> 36 & 0177) + n;
+	if (exp > 127)
+		uerror ("переполнение при сложении порядков");
+	if (exp < 0 || (x & MANTISSA) == 0) {
+		/* Ноль. */
+		x &= TAG;
+	}
+	return x;
 }
 
 /*
@@ -353,8 +373,8 @@ uint64_t multiplication (uint64_t x, uint64_t y, int no_round, int no_norm)
 	yexp = y >> 36 & 0177;
 
 	/* Извлечем мантиссу чисел. */
-	xm = x & 0777777777777LL;
-	ym = y & 0777777777777LL;
+	xm = x & MANTISSA;
+	ym = y & MANTISSA;
 
 	/* Умножим. */
 	rexp = xexp + yexp - 64;
@@ -365,9 +385,9 @@ uint64_t multiplication (uint64_t x, uint64_t y, int no_round, int no_norm)
 		--rexp;
 		r <<= 1;
 		RMR <<= 1;
-		if (RMR & 01000000000000LL) {
+		if (RMR & BIT37) {
 			r |= 1;
-			RMR &= 0777777777777LL;
+			RMR &= MANTISSA;
 		}
 	} else if (! no_round) {
 		/* Округление. */
@@ -392,7 +412,7 @@ uint64_t multiplication (uint64_t x, uint64_t y, int no_round, int no_norm)
 
 void run ()
 {
-	int next_address, flags, op, a1, a2, a3;
+	int next_address, flags, op, a1, a2, a3, n = 0;
 	uint64_t x, y;
 
 	next_address = start_address;
@@ -434,6 +454,9 @@ void run ()
 		default:
 			uerror ("неверная команда: %02o", op);
 			continue;
+		/*
+		 * Логические операции
+		 */
 		case 000: /* зп - пересылка */
 			RR = load (a1);
 			store (a3, RR);
@@ -456,7 +479,7 @@ void run ()
 			break;
 		case 015: /* нтж - поразрядное сравнение (исключаищее или) */
 			RR = load (a1) ^ load (a2);
-			store (a3, RR);
+logop:			store (a3, RR);
 			OMEGA = (RR == 0);
 			cycle (24);
 			break;
@@ -470,23 +493,186 @@ void run ()
 			break;
 		case 055: /* и - логическое умножение (и) */
 			RR = load (a1) & load (a2);
-			store (a3, RR);
-			OMEGA = (RR == 0);
-			cycle (24);
-			break;
+			goto logop;
 		case 075: /* или - логическое сложение (или) */
 			RR = load (a1) | load (a2);
+			goto logop;
+		case 013: /* слк - сложение команд */
+			x = load (a1);
+			y = (x & MANTISSA) + (load (a2) & MANTISSA);
+addm:			RR = (x & ~MANTISSA) | (y & MANTISSA);
 			store (a3, RR);
-			OMEGA = (RR == 0);
+			OMEGA = (y & BIT37) != 0;
 			cycle (24);
 			break;
+		case 033: /* вчк - вычитание команд */
+			x = load (a1);
+			y = (x & MANTISSA) - (load (a2) & MANTISSA);
+			goto addm;
+		case 053: /* слко - сложение кодов операций */
+			x = load (a1);
+			y = (x & ~MANTISSA) + (load (a2) & ~MANTISSA);
+addop:			RR = (x & MANTISSA) | (y & ~MANTISSA);
+			store (a3, RR);
+			OMEGA = (y & BIT46) != 0;
+			cycle (24);
+			break;
+		case 073: /* вчко - вычитание кодов операций */
+			x = load (a1);
+			y = (x & ~MANTISSA) - (load (a2) & ~MANTISSA);
+			goto addop;
+		case 014: /* сдма - сдвиг мантиссы по адресу */
+			n = (a1 & 0177) - 64;
+			cycle (61.5 + 1.5 * (n>0 ? n : -n));
+shm:			y = load (a2);
+			RR = (y & ~MANTISSA);
+			if (n > 0)
+				RR |= (y & MANTISSA) << n;
+			else if (n < 0)
+				RR |= (y & MANTISSA) >> -n;
+			store (a3, RR);
+			OMEGA = (RR == 0);
+			break;
+		case 034: /* сдм - сдвиг мантиссы по порядку числа */
+			n = (int) (load (a1) >> 36 & 0177) - 64;
+			cycle (24 + 1.5 * (n>0 ? n : -n));
+			goto shm;
+		case 054: /* сда - сдвиг по адресу */
+			n = (a1 & 0177) - 64;
+			cycle (61.5 + 1.5 * (n>0 ? n : -n));
+shift:			RR = load (a2);
+			if (n > 0)
+				RR <<= n;
+			else if (n < 0)
+				RR >>= -n;
+			store (a3, RR);
+			OMEGA = (RR == 0);
+			break;
+		case 074: /* сд - сдвиг по порядку числа */
+			x = (int) (load (a1) >> 36 & 0177) - 64;
+			cycle (24 + 1.5 * (n>0 ? n : -n));
+			goto shift;
+		case 007: /* слц - циклическое сложение */
+			x = load (a1);
+			y = load (a2);
+			RR = (x & ~MANTISSA) + (y & ~MANTISSA);
+			y = (x & MANTISSA) + (y & MANTISSA);
+csum:			if (RR & BIT46) {
+				RR += BIT37;
+				RR &= ~BIT46;
+			}
+			if (y & BIT37)
+				y += 1;
+			RR |= y & MANTISSA;
+			store (a3, RR);
+			OMEGA = (y & BIT37) != 0;
+			cycle (24);
+			break;
+		case 027: /* вчц - циклическое вычитание */
+			x = load (a1);
+			y = load (a2);
+			RR = (x & ~MANTISSA) - (y & ~MANTISSA);
+			y = (x & MANTISSA) - (y & MANTISSA);
+			goto csum;
+		case 067: /* сдц - циклический сдвиг */
+			x = load (a1);
+			RR = (x & 07777777) << 24 | (x >> 24 & 07777777);
+			store (a3, RR);
+			cycle (60);
+			break;
+		/*
+		 * Операции управления
+		 */
+		case 016: /* пв - передача управления с возвратом */
+			RR = 016000000000000LL | (a1 << 12);
+			store (a3, RR);
+			next_address = a2;
+			cycle (24);
+			break;
+		case 036: /* пе - передача управления по условию Ω=1 */
+			RR = load (a1);
+			store (a3, RR);
+			if (OMEGA)
+				next_address = a2;
+			cycle (24);
+			break;
+		case 056: /* пб - передача управления */
+			RR = load (a1);
+			store (a3, RR);
+			next_address = a2;
+			cycle (24);
+			break;
+		case 076: /* по - передача управления по условию Ω=0 */
+			RR = load (a1);
+			store (a3, RR);
+			if (! OMEGA)
+				next_address = a2;
+			cycle (24);
+			break;
+		case 077: /* стоп - останов машины */
+			RR = 0;
+			store (a3, RR);
+			cycle (24);
+			uerror ("останов: A1=%04o, A2=%04o", a1, a2);
+			break;
+		case 011: /* цме - переход по < и Ω=1 */
+			if (RA < a1 && OMEGA)
+				next_address = a2;
+			cycle (24);
+			break;
+		case 031: /* цбре - переход по >= и Ω=1 */
+			if (RA >= a1 && OMEGA)
+				next_address = a2;
+			cycle (24);
+			break;
+		case 051: /* цмо - переход по < и Ω=0 */
+			if (RA < a1 && ! OMEGA)
+				next_address = a2;
+			cycle (24);
+			break;
+		case 071: /* цбро - переход по >= и Ω=0 */
+			if (RA >= a1 && ! OMEGA)
+				next_address = a2;
+			cycle (24);
+			break;
+		case 012: /* цм - переход по < */
+			if (RA < a1)
+				next_address = a2;
+			cycle (24);
+			break;
+		case 032: /* цбр - переход по >= */
+			if (RA >= a1)
+				next_address = a2;
+			cycle (24);
+			break;
+		case 052: /* раа - установка регистра адреса адресом */
+			RR = 052000000000000LL | (a1 << 12);
+			store (a3, RR);
+			RA = a2;
+			cycle (24);
+			break;
+		case 072: /* ра - установка регистра адреса числом */
+			RR = 052000000000000LL | (a1 << 12);
+			store (a3, RR);
+			RA = load (a2) >> 12 & 07777;
+			cycle (24);
+			break;
+#if 0
+		case 010: /* вп - ввод с перфокарт */
+		case 030: /* впбк - ввод с перфокарт без проверки контрольной суммы */
+		case 050: /* ма - подготовка обращения к внешнему устройству */
+		case 070: /* мб - выполнение обращения к внешнему устройству */
+#endif
+		/*
+		 * Арифметические операции
+		 */
 		case 001: /* сл - сложение с округлением и нормализацией */
 		case 021: /* слбо - сложение без округления с нормализацией */
 		case 041: /* слбн - сложение с округлением без нормализации */
 		case 061: /* слбно - сложение без округления и без нормализации */
 			x = load (a1);
 			y = load (a2);
-			RR = addition (x, y, op >> 4 & 1, op >> 5 & 1);
+add:			RR = addition (x, y, op >> 4 & 1, op >> 5 & 1);
 			store (a3, RR);
 			OMEGA = (RR & SIGN) != 0;
 			cycle (29.5);
@@ -497,22 +683,14 @@ void run ()
 		case 062: /* вчбно - вычитание без округления и без нормализации */
 			x = load (a1);
 			y = load (a2) ^ SIGN;
-			RR = addition (x, y, op >> 4 & 1, op >> 5 & 1);
-			store (a3, RR);
-			OMEGA = (RR & SIGN) != 0;
-			cycle (29.5);
-			break;
+			goto add;
 		case 003: /* вчм - вычитание модулей с округлением и нормализацией */
 		case 023: /* вчмбо - вычитание модулей без округления с нормализацией */
 		case 043: /* вчмбн - вычитание модулей с округлением без нормализации */
 		case 063: /* вчмбно - вычитание модулей без округления и без нормализации */
 			x = load (a1) & ~SIGN;
 			y = load (a2) | SIGN;
-			RR = addition (x, y, op >> 4 & 1, op >> 5 & 1);
-			store (a3, RR);
-			OMEGA = (RR & SIGN) != 0;
-			cycle (29.5);
-			break;
+			goto add;
 		case 005: /* умн - умножение с округлением и нормализацией */
 		case 025: /* умнбо - умножение без округления с нормализацией */
 		case 045: /* умнбн - умножение с округлением без нормализации */
@@ -530,80 +708,33 @@ void run ()
 			OMEGA = (int) (RR >> 36 & 0177) > 0100;
 			cycle (24);
 			break;
-		case 016: /* пв - передача управления с возвратом */
-			RR = 016000000000000LL | (a1 << 12);
+		case 006: /* слпа - сложение порядка с адресом */
+			n = (a1 & 0177) - 64;
+			y = load (a2);
+addexp:			RR = add_exponent (y, n);
 			store (a3, RR);
-			next_address = a2;
-			/* Омега не изменяется. */
-			cycle (24);
+			OMEGA = (int) (RR >> 36 & 0177) > 0100;
+			cycle (61.5);
 			break;
-		case 036: /* пе - передача управления по условию Ω=1 */
-			RR = load (a1);
-			store (a3, RR);
-			if (OMEGA)
-				next_address = a2;
-			/* Омега не изменяется. */
-			cycle (24);
-			break;
-		case 056: /* пб - передача управления */
-			RR = load (a1);
-			store (a3, RR);
-			next_address = a2;
-			/* Омега не изменяется. */
-			cycle (24);
-			break;
-		case 076: /* по - передача управления по условию Ω=0 */
-			RR = load (a1);
-			store (a3, RR);
-			if (! OMEGA)
-				next_address = a2;
-			/* Омега не изменяется. */
-			cycle (24);
-			break;
-		case 077: /* стоп - останов машины */
-			RR = 0;
-			store (a3, RR);
-			/* Омега не изменяется. */
-			cycle (24);
-			uerror ("останов: A1=%04o, A2=%04o", a1, a2);
-			break;
+		case 026: /* слп - сложение порядков чисел */
+			x = load (a2);
+			n = (int) (x >> 36 & 0177) - 64;
+			y = load (a2) | (x & TAG);
+			goto addexp;
+		case 046: /* вчпа - вычитание адреса из порядка */
+			n = 64 - (a1 & 0177);
+			y = load (a2);
+			goto addexp;
+		case 066: /* вчп - вычитание порядков чисел */
+			x = load (a2);
+			n = 64 - (int) (x >> 36 & 0177);
+			y = load (a2) | (x & TAG);
+			goto addexp;
 #if 0
-		/* Арифметические операции */
-		case 004: /* дел - Деление с округлением */
-		case 024: /* делбо - Деление без округления */
-		case 044: /* кор - Извлечение корня с округлением */
-		case 064: /* корбо - Извлечение корня без округления */
-		case 006: /* слпа - Сложение порядка с адресом */
-		case 026: /* слп - Сложение порядков чисел */
-		case 046: /* вчпа - Вычитание адреса из порядка */
-		case 066: /* вчп - Вычитание порядков чисел */
-
-		/* Логические операции */
-		case 013: /* слк - Сложение команд */
-		case 033: /* вчк - Вычитание команд */
-		case 053: /* слко - Сложение кодов операций */
-		case 073: /* вчко - Вычитание кодов операций */
-		case 014: /* сдма - Сдвиг мантиссы по адресу */
-		case 034: /* сдм - Сдвиг мантиссы по порядку числа */
-		case 054: /* сда - Сдвиг по адресу */
-		case 074: /* сд - Сдвиг по порядку числа */
-		case 007: /* слц - Циклическое сложение */
-		case 027: /* вчц - Циклическое вычитание */
-		case 067: /* сдц - Циклический сдвиг */
-
-		/* Операции управления */
-		case 010: /* вп - Ввод с перфокарт */
-		case 030: /* впбк - Ввод с перфокарт без проверки контрольной суммы */
-		case 050: /* ма - Подготовка обращения к внешнему устройству */
-		case 070: /* мб - Выполнение обращения к внешнему устройству */
-		case 011: /* цме - Сравнение и установка регистра адреса, переход по < и Ω=1 */
-		case 031: /* цбре - Сравнение и установка регистра адреса, переход по >= и Ω=1 */
-		case 051: /* цмо - Сравнение и установка регистра адреса, переход по < и Ω=0 */
-		case 071: /* цбро - Сравнение и установка регистра адреса, переход по >= и Ω=0 */
-		case 012: /* цм - Сравнение и установка регистра адреса, переход по < */
-		case 032: /* цбр - Сравнение и установка регистра адреса, переход по >= */
-		case 052: /* раа - Установка регистра адреса */
-		case 072: /* ра - Установка регистра адреса по числу */
+		case 004: /* дел - деление с округлением */
+		case 024: /* делбо - деление без округления */
+		case 044: /* кор - извлечение корня с округлением */
+		case 064: /* корбо - извлечение корня без округления */
 #endif
 		}
 	}
