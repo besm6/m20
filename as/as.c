@@ -984,7 +984,7 @@ void listing ()
 	/* Sort the symbol table. */
 	qsort (stab, stabfree, sizeof (stab[0]), compare_stab);
 
-	fprintf (lstfile, "Символы данных:\n");
+	utf8_puts ("Символы данных:\n", lstfile);
 	for (s=stab; s<stab+stabfree; ++s) {
 		if (s->name[1] == '.')
 			continue;
