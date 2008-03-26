@@ -7,6 +7,7 @@
 #include <string.h>
 #include <stdarg.h>
 #include <unistd.h>
+#include <math.h>
 #include "config.h"
 #include "encoding.h"
 #include "ieee.h"
@@ -21,6 +22,7 @@
 #define TAG		00400000000000000LL	/* 45-й бит-признак */
 #define SIGN		00200000000000000LL	/* 44-й бит-знак */
 #define BIT37		00001000000000000LL	/* 37-й бит */
+#define BIT19		00000000001000000LL	/* 19-й бит */
 #define MANTISSA	00000777777777777LL	/* биты 36..1 */
 
 int debug;
@@ -410,6 +412,95 @@ uint64_t multiplication (uint64_t x, uint64_t y, int no_round, int no_norm)
 	return r;
 }
 
+/*
+ * Деление двух чисел, с блокировкой округления, если требуется.
+ */
+uint64_t division (uint64_t x, uint64_t y, int no_round)
+{
+	int xexp, yexp, rexp;
+	uint64_t xm, ym, r;
+
+	/* Извлечем порядок чисел. */
+	xexp = x >> 36 & 0177;
+	yexp = y >> 36 & 0177;
+
+	/* Извлечем мантиссу чисел. */
+	xm = x & MANTISSA;
+	ym = y & MANTISSA;
+	if (xm >= 2*ym)
+		uerror ("переполнение мантиссы при делении");
+
+	/* Поделим. */
+	rexp = xexp - yexp + 64;
+	r = (double) xm / ym * BIT37;
+	if (r >> 36) {
+		/* Выход за 36 разрядов, нормализация вправо. */
+		if (! no_round) {
+			/* Округление. */
+			r += 1;
+		}
+		r >>= 1;
+		++rexp;
+	}
+	if (r == 0 || rexp < 0) {
+		/* Нуль. */
+		return (x | y) & TAG;
+	}
+	if (rexp > 127)
+		uerror ("переполнение при сложении");
+
+	/* Конструируем результат. */
+	r |= (uint64_t) rexp << 36;
+	r |= ((x ^ y) & SIGN) | ((x | y) & TAG);
+	return r;
+}
+
+/*
+ * Вычисление квадратного корня, с блокировкой округления, если требуется.
+ */
+uint64_t square_root (uint64_t x, int no_round)
+{
+	int exp;
+	uint64_t r;
+	double q;
+
+	if (x & SIGN)
+		uerror ("корень из отрицательного числа");
+
+	/* Извлечем порядок числа. */
+	exp = x >> 36 & 0177;
+
+	/* Извлечем мантиссу чисел. */
+	r = x & MANTISSA;
+
+	/* Вычисляем корень. */
+	if (exp & 1) {
+		/* Нечетный порядок. */
+		r >>= 1;
+	}
+	exp = (exp >> 1) + 32;
+	q = sqrt ((double) r) * BIT19;
+	r = (uint64_t) q;
+	if (! no_round) {
+		/* Смотрим остаток. */
+		if (q - r >= 0.5) {
+			/* Округление. */
+			r += 1;
+		}
+	}
+	if (r == 0) {
+		/* Нуль. */
+		return x & TAG;
+	}
+	if (r & ~MANTISSA)
+		uerror ("ошибка квадратного корня");
+
+	/* Конструируем результат. */
+	r |= (uint64_t) exp << 36;
+	r |= x & TAG;
+	return r;
+}
+
 void run ()
 {
 	int next_address, flags, op, a1, a2, a3, n = 0;
@@ -702,6 +793,23 @@ add:			RR = addition (x, y, op >> 4 & 1, op >> 5 & 1);
 			OMEGA = (int) (RR >> 36 & 0177) > 0100;
 			cycle (70);
 			break;
+		case 004: /* дел - деление с округлением */
+		case 024: /* делбо - деление без округления */
+			x = load (a1);
+			y = load (a2);
+			RR = division (x, y, op >> 4 & 1);
+			store (a3, RR);
+			OMEGA = (int) (RR >> 36 & 0177) > 0100;
+			cycle (136);
+			break;
+		case 044: /* кор - извлечение корня с округлением */
+		case 064: /* корбо - извлечение корня без округления */
+			x = load (a1);
+			RR = square_root (x, op >> 4 & 1);
+			store (a3, RR);
+			OMEGA = (int) (RR >> 36 & 0177) > 0100;
+			cycle (275);
+			break;
 		case 047: /* счмр - выдача младших разрядов произведения */
 			RR = RMR;
 			store (a3, RR);
@@ -730,12 +838,6 @@ addexp:			RR = add_exponent (y, n);
 			n = 64 - (int) (x >> 36 & 0177);
 			y = load (a2) | (x & TAG);
 			goto addexp;
-#if 0
-		case 004: /* дел - деление с округлением */
-		case 024: /* делбо - деление без округления */
-		case 044: /* кор - извлечение корня с округлением */
-		case 064: /* корбо - извлечение корня без округления */
-#endif
 		}
 	}
 }
