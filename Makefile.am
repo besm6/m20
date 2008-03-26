@@ -8,5 +8,4 @@ distclean-local:
 
 log:	.svn
 	svn update
-	if [ -d /usr/share/locale/en_US.UTF-8 ]; then LC_ALL=en_US.UTF-8; \
-	else LC_ALL=en_US.utf8; fi && svn log > ChangeLog
+	svn log > ChangeLog
