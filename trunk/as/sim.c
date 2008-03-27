@@ -18,12 +18,30 @@
 #define LINE_ADDR	2
 #define LINE_START	3
 
+/*
+ * Разряды машинного слова.
+ */
 #define BIT46		01000000000000000LL	/* 46-й бит */
 #define TAG		00400000000000000LL	/* 45-й бит-признак */
 #define SIGN		00200000000000000LL	/* 44-й бит-знак */
 #define BIT37		00001000000000000LL	/* 37-й бит */
 #define BIT19		00000000001000000LL	/* 19-й бит */
 #define MANTISSA	00000777777777777LL	/* биты 36..1 */
+
+/*
+ * Разряды условного числа для обращения к внешнему устройству.
+ */
+#define EXT_DIS_RAM	04000	/* 36 - БМ - блокировка памяти */
+#define EXT_DIS_CHECK	02000   /* 35 - БК - блокировка контроля */
+#define EXT_TAPE_REV	01000   /* 34 - ОН - обратное движение ленты */
+#define EXT_DIS_STOP	00400   /* 33 - БО - блокировка останова */
+#define EXT_PUNCH	00200   /* 32 - Пф - перфорация */
+#define EXT_PRINT	00100   /* 31 - Пч - печать */
+#define EXT_TAPE_FORMAT	00040   /* 30 - РЛ - разметка ленты */
+#define EXT_TAPE	00020   /* 29 - Л - лента */
+#define EXT_DRUM	00010   /* 28 - Б - барабан */
+#define EXT_WRITE	00004   /* 27 - Зп - запись */
+#define EXT_UNIT	00003   /* 26,25 - номер барабана или ленты */
 
 int debug;
 char *infile;
@@ -42,6 +60,12 @@ uint64_t RPU1;			/* РПУ1 - регистр 1 пульта управления
 uint64_t RPU2;			/* РПУ2 - регистр 2 пульта управления */
 uint64_t RPU3;			/* РПУ3 - регистр 3 пульта управления */
 uint64_t RPU4;			/* РПУ4 - регистр 4 пульта управления */
+
+/* Параметры обмена с внешним устройством. */
+int ext_op;			/* УЧ - условное число */
+int ext_disk_addr;		/* А_МЗУ - начальный адрес на барабане/ленте */
+int ext_ram_start;		/* α_МОЗУ - начальный адрес памяти */
+int ext_ram_finish;		/* ω_МОЗУ - конечный адрес памяти */
 
 uint64_t ram [DATSIZE];
 unsigned char ram_dirty [DATSIZE];
@@ -501,6 +525,135 @@ uint64_t square_root (uint64_t x, int no_round)
 	return r;
 }
 
+void drum_write (int unit, int addr, int first, int last)
+{
+	/* TODO */
+}
+
+int drum_read (int unit, int addr, int first, int last)
+{
+	/* TODO */
+	return 0;
+}
+
+void print_octal (int first, int last)
+{
+	/* TODO */
+}
+
+void print_decimal (int first, int last)
+{
+	/* TODO */
+}
+
+void print_text (int first, int last)
+{
+	/* TODO */
+}
+
+/*
+ * Подготовка обращения к внешнему устройству.
+ * В условном числе должен быть задан один из пяти видов работы:
+ * барабан, лента, разметка ленты, печать или перфорация.
+ */
+void ext_setup (int a1, int a2, int a3)
+{
+	ext_op = a1;
+	ext_disk_addr = a2;
+	ext_ram_finish = a3;
+
+	if (ext_op & EXT_WRITE) {
+		/* При записи проверка контрольной суммы не производится,
+		 * поэтому блокировка останова не имеет смысла. */
+		ext_op &= ~EXT_DIS_STOP;
+	}
+	if (ext_op & EXT_DRUM) {
+		/* Для барабана направление движения задавать не надо. */
+		ext_op &= ~EXT_TAPE_REV;
+		if (ext_op & (EXT_PUNCH | EXT_PRINT |
+		    EXT_TAPE_FORMAT | EXT_TAPE))
+			uerror ("неверное УЧ для обращения к барабану: %04o", ext_op);
+	}
+	if (ext_op & EXT_TAPE) {
+		if (ext_op & (EXT_PUNCH | EXT_PRINT | EXT_TAPE_FORMAT))
+			uerror ("неверное УЧ для обращения к ленте: %04o", ext_op);
+	}
+	if (ext_op & EXT_TAPE_FORMAT) {
+		/* При разметке ленты не имеют значения признаки записи,
+		 * блокировки останова и обратного направления движения. */
+		ext_op &= ~(EXT_WRITE | EXT_DIS_STOP | EXT_TAPE_REV);
+		if (ext_op & (EXT_PUNCH | EXT_PRINT | EXT_DIS_CHECK))
+			uerror ("неверное УЧ для разметки ленты: %04o", ext_op);
+	}
+	if (ext_op & EXT_PRINT) {
+		/* При печати не имеют значения признаки записи и
+		 * обратного направления движения ленты. */
+		ext_op &= ~(EXT_WRITE | EXT_TAPE_REV);
+	}
+	if (ext_op & EXT_PUNCH) {
+		/* При перфорации не имеют значения признаки записи,
+		 * блокировки останова и обратного направления движения. */
+		ext_op &= ~(EXT_WRITE | EXT_DIS_STOP | EXT_TAPE_REV);
+	}
+}
+
+/*
+ * Выполнение обращения к внешнему устройству.
+ * В случае ошибки возвращается 0.
+ * Контрольная сумма записи накапливается в параметре sum (не реализовано).
+ * Блокировка памяти (EXT_DIS_RAM) и блокировка контроля (EXT_DIS_CHECK)
+ * пока не поддерживаются.
+ */
+int ext_io (int a1, uint64_t *sum)
+{
+	ext_ram_start = a1;
+
+	*sum = 0;
+
+	if (ext_op & EXT_DRUM) {
+		/* Барабан */
+		if (ext_op & EXT_WRITE) {
+			drum_write ((ext_op & EXT_UNIT), ext_disk_addr,
+				ext_ram_start, ext_ram_finish);
+			return 1;
+		} else {
+			if (drum_read ((ext_op & EXT_UNIT), ext_disk_addr,
+			  ext_ram_start, ext_ram_finish))
+				return 1;
+			if (! (ext_op & EXT_DIS_STOP))
+				uerror ("ошибка чтения барабана: %d %04o %04o %04o",
+					(ext_op & EXT_UNIT), ext_disk_addr,
+					ext_ram_start, ext_ram_finish);
+			return 0;
+		}
+	} else if (ext_op & EXT_TAPE) {
+		/* Лента */
+		uerror ("работа с магнитной лентой не поддерживается");
+
+	} else if (ext_op & EXT_TAPE_FORMAT) {
+		/* Разметка ленты */
+		uerror ("разметка ленты не поддерживается");
+
+	} else if (ext_op & EXT_PRINT) {
+		/* Печать. Параметр EXT_PUNCH (накопление в буфере без выдачи)
+		 * пока не реализован. */
+		if (ext_op & EXT_DIS_STOP) {
+			/* Восьмеричная печать */
+			print_octal (ext_ram_start, ext_ram_finish);
+		} else if (ext_op & EXT_TAPE_FORMAT) {
+			/* Текстовая печать */
+			print_text (ext_ram_start, ext_ram_finish);
+		} else {
+			/* Десятичная печать */
+			print_decimal (ext_ram_start, ext_ram_finish);
+		}
+	} else if (ext_op & EXT_PUNCH) {
+		uerror ("вывод на перфокарты не поддерживается");
+	} else
+		uerror ("неверное УЧ для инструкции МБ: %04o", ext_op);
+	return 0;
+}
+
 void run ()
 {
 	int next_address, flags, op, a1, a2, a3, n = 0;
@@ -748,12 +901,23 @@ csum:			if (RR & BIT46) {
 			RA = load (a2) >> 12 & 07777;
 			cycle (24);
 			break;
-#if 0
 		case 010: /* вп - ввод с перфокарт */
-		case 030: /* впбк - ввод с перфокарт без проверки контрольной суммы */
+		case 030: /* впбк - ввод с перфокарт без проверки к.суммы */
+			uerror ("ввод с перфокарт не поддерживается");
+			break;
 		case 050: /* ма - подготовка обращения к внешнему устройству */
+			ext_setup (a1, a2, a3);
+			cycle (24);
+			continue;
 		case 070: /* мб - выполнение обращения к внешнему устройству */
-#endif
+			if (ext_op == 07777)
+				uerror ("команда МБ не работает без МА");
+			if (! ext_io (a1, &RR))
+				next_address = a2;
+			if ((ext_op & EXT_WRITE) && ! (ext_op & EXT_DIS_CHECK))
+				store (a3, RR);
+			cycle (24);
+			break;
 		/*
 		 * Арифметические операции
 		 */
@@ -839,6 +1003,7 @@ addexp:			RR = add_exponent (y, n);
 			y = load (a2) | (x & TAG);
 			goto addexp;
 		}
+		ext_op = 07777;
 	}
 }
 
