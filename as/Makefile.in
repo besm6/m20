@@ -49,7 +49,7 @@ as20_LDADD = $(LDADD)
 am_dis20_OBJECTS = dis.$(OBJEXT) ieee.$(OBJEXT)
 dis20_OBJECTS = $(am_dis20_OBJECTS)
 dis20_LDADD = $(LDADD)
-am_sim20_OBJECTS = sim.$(OBJEXT) ieee.$(OBJEXT)
+am_sim20_OBJECTS = sim.$(OBJEXT) encoding.$(OBJEXT) ieee.$(OBJEXT)
 sim20_OBJECTS = $(am_sim20_OBJECTS)
 sim20_LDADD = $(LDADD)
 DEFAULT_INCLUDES = -I. -I$(top_builddir)@am__isrc@
@@ -151,7 +151,7 @@ top_builddir = @top_builddir@
 top_srcdir = @top_srcdir@
 dis20_SOURCES = dis.c ieee.c
 as20_SOURCES = as.c encoding.c ieee.c
-sim20_SOURCES = sim.c ieee.c
+sim20_SOURCES = sim.c encoding.c ieee.c
 AM_CFLAGS = -Wall -g -O
 all: all-am
 

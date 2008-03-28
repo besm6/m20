@@ -8,3 +8,4 @@
 #endif
 
 uint64_t ieee_to_m20 (double d);
+double m20_to_ieee (uint64_t d);

@@ -536,19 +536,77 @@ int drum_read (int unit, int addr, int first, int last)
 	return 0;
 }
 
-void print_octal (int first, int last)
-{
-	/* TODO */
-}
-
+/*
+ * Печать десятичных чисел. Из книги Ляшенко:
+ * "В одной строке располагается информация из восьми ячеек памяти.
+ * Каждое десятичное число из ячейки занимает на бумаге 14 позиций,
+ * промежуток между числами занимает две позиции. В первых трёх
+ * позициях располагаются признак, знак числа, знак порядка.
+ * Минус в первой позиции означает, что число имеет признак."
+ */
 void print_decimal (int first, int last)
 {
-	/* TODO */
+	int n;
+	uint64_t x;
+	double d;
+
+	/* Не будем бороться за совместимость, сделаем по-современному. */
+	for (n=0; ; ++n) {
+		x = load (first + n);
+		d = m20_to_ieee (x);
+		putchar (x & TAG ? '#' : ' ');
+		printf ("%13e", d);
+		if (first + n >= last) {
+			printf ("\n");
+			break;
+		}
+		printf ((n & 7) == 7 ? "\n" : "  ");
+	}
 }
 
+/*
+ * Печать восьмеричных чисел. Из книги Ляшенко:
+ * "В одной строке располагается информация из 8 ячеек памяти.
+ * Каждое число занимает 15 позиций с интервалом между числами
+ * в одну позицию."
+ */
+void print_octal (int first, int last)
+{
+	int n;
+	uint64_t x;
+
+	for (n=0; ; ++n) {
+		x = load (first + n);
+		printf ("%015llo", x);
+		if (first + n >= last) {
+			printf ("\n");
+			break;
+		}
+		printf ((n & 7) == 7 ? "\n" : " ");
+	}
+}
+
+/*
+ * Печать текстовых данных в кодировке ГОСТ.
+ */
 void print_text (int first, int last)
 {
-	/* TODO */
+	int n, i, c;
+	uint64_t x;
+
+	for (n=0; ; ++n) {
+		x = load (first + n);
+		for (i=0; i<6; ++i) {
+			c = x >> (35 - 7*i) & 0177;
+			gost_putc (c, stdout);
+		}
+		if (first + n >= last) {
+			printf ("\n");
+			break;
+		}
+		if ((n & 127) == 127)
+			printf ("\n");
+	}
 }
 
 /*
@@ -578,17 +636,17 @@ void ext_setup (int a1, int a2, int a3)
 		if (ext_op & (EXT_PUNCH | EXT_PRINT | EXT_TAPE_FORMAT))
 			uerror ("неверное УЧ для обращения к ленте: %04o", ext_op);
 	}
-	if (ext_op & EXT_TAPE_FORMAT) {
+	if (ext_op & EXT_PRINT) {
+		/* При печати не имеют значения признаки записи и
+		 * обратного направления движения ленты. */
+		ext_op &= ~(EXT_WRITE | EXT_TAPE_REV);
+
+	} else if (ext_op & EXT_TAPE_FORMAT) {
 		/* При разметке ленты не имеют значения признаки записи,
 		 * блокировки останова и обратного направления движения. */
 		ext_op &= ~(EXT_WRITE | EXT_DIS_STOP | EXT_TAPE_REV);
 		if (ext_op & (EXT_PUNCH | EXT_PRINT | EXT_DIS_CHECK))
 			uerror ("неверное УЧ для разметки ленты: %04o", ext_op);
-	}
-	if (ext_op & EXT_PRINT) {
-		/* При печати не имеют значения признаки записи и
-		 * обратного направления движения ленты. */
-		ext_op &= ~(EXT_WRITE | EXT_TAPE_REV);
 	}
 	if (ext_op & EXT_PUNCH) {
 		/* При перфорации не имеют значения признаки записи,
@@ -630,10 +688,6 @@ int ext_io (int a1, uint64_t *sum)
 		/* Лента */
 		uerror ("работа с магнитной лентой не поддерживается");
 
-	} else if (ext_op & EXT_TAPE_FORMAT) {
-		/* Разметка ленты */
-		uerror ("разметка ленты не поддерживается");
-
 	} else if (ext_op & EXT_PRINT) {
 		/* Печать. Параметр EXT_PUNCH (накопление в буфере без выдачи)
 		 * пока не реализован. */
@@ -647,8 +701,15 @@ int ext_io (int a1, uint64_t *sum)
 			/* Десятичная печать */
 			print_decimal (ext_ram_start, ext_ram_finish);
 		}
+		return 1;
+
 	} else if (ext_op & EXT_PUNCH) {
 		uerror ("вывод на перфокарты не поддерживается");
+
+	} else if (ext_op & EXT_TAPE_FORMAT) {
+		/* Разметка ленты */
+		uerror ("разметка ленты не поддерживается");
+
 	} else
 		uerror ("неверное УЧ для инструкции МБ: %04o", ext_op);
 	return 0;
@@ -912,7 +973,7 @@ csum:			if (RR & BIT46) {
 		case 070: /* мб - выполнение обращения к внешнему устройству */
 			if (ext_op == 07777)
 				uerror ("команда МБ не работает без МА");
-			if (! ext_io (a1, &RR))
+			if (! ext_io (a1, &RR) && a2)
 				next_address = a2;
 			if ((ext_op & EXT_WRITE) && ! (ext_op & EXT_DIS_CHECK))
 				store (a3, RR);
