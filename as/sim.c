@@ -7,6 +7,8 @@
 #include <string.h>
 #include <stdarg.h>
 #include <unistd.h>
+#include <fcntl.h>
+#include <sys/stat.h>
 #include <math.h>
 #include "config.h"
 #include "encoding.h"
@@ -46,6 +48,7 @@
 int trace;
 char *infile;
 double clock;			/* время выполнения, микросекунды */
+int drum;			/* файл с образом барабана */
 
 int start_address;
 int RVK;			/* РВК - регистр выборки команды */
@@ -503,19 +506,133 @@ uint64_t square_root (uint64_t x, int no_round)
 	return r;
 }
 
-void drum_write (int unit, int addr, int first, int last)
+/*
+ * Подсчет контрольной суммы, как в команде СЛЦ.
+ */
+uint64_t compute_checksum (uint64_t x, uint64_t y)
 {
-	uerror ("запись МБ %d адрес %04o память %04o-%04o",
-		unit, addr, first, last);
-	/* TODO */
+	uint64_t sum;
+
+	sum = (x & ~MANTISSA) + (y & ~MANTISSA);
+	if (sum & BIT46)
+		sum += BIT37;
+	y = (x & MANTISSA) + (y & MANTISSA);
+	if (y & BIT37)
+		y += 1;
+	return (sum & ~MANTISSA) | (y & MANTISSA);
 }
 
-int drum_read (int unit, int addr, int first, int last)
+/*
+ * Создаём образ барабана размером 040000 слов.
+ */
+void drum_create (char *drum_file)
 {
-	uerror ("чтение МБ %d адрес %04o память %04o-%04o",
-		unit, addr, first, last);
-	/* TODO */
-	return 0;
+	uint64_t w;
+	int fd, i;
+
+	fd = open (drum_file, O_RDWR | O_CREAT, 0664);
+	if (fd < 0)
+		return;
+	w = ~0LL;
+	for (i=0; i<040000; ++i)
+		write (fd, &w, 8);
+	close (fd);
+	if (trace)
+		printf ("Создан барабан %s\n", drum_file);
+}
+
+/*
+ * Открываем файл с образом барабана.
+ */
+int drum_open ()
+{
+	char *drum_file;
+	int fd;
+
+	drum_file = getenv ("M20_DRUM");
+	if (! drum_file) {
+		char *home;
+
+		home = getenv ("HOME");
+		if (! home)
+			home = "";
+		drum_file = malloc (strlen(home) + 20);
+		if (! drum_file)
+			uerror ("мало памяти");
+		strcpy (drum_file, home);
+		strcat (drum_file, "/.m20");
+		mkdir (drum_file, 0775);
+		strcat (drum_file, "/drum.bin");
+	}
+	fd = open (drum_file, O_RDWR);
+	if (fd < 0) {
+		drum_create (drum_file);
+		fd = open (drum_file, O_RDWR);
+		if (fd < 0)
+			uerror ("не могу создать %s", drum_file);
+	}
+	if (trace)
+		printf ("Открыт барабан %s\n", drum_file);
+	return fd;
+}
+
+/*
+ * Запись на барабан.
+ * Если параметр sum ненулевой, посчитываем и кладём туда контрольную
+ * сумму массива. Также запмсываем сумму в слово last+1 на барабане.
+ */
+void drum_write (int addr, int first, int last, uint64_t *sum)
+{
+	int len, i;
+
+	if (trace)
+		printf ("\tзапись МБ %05o память %04o-%04o\n",
+			addr, first, last);
+	lseek (drum, addr * 8L, 0);
+	len = (last - first + 1) * 8;
+	if (len <= 0 || len > (040000 - addr) * 8)
+		uerror ("неверная длина записи на МБ: %d байт", len);
+	if (write (drum, &ram [first], len) != len)
+		uerror ("ошибка записи на МБ: %d байт", len);
+	if (! sum)
+		return;
+
+	/* Подсчитываем и записываем контрольную сумму. */
+	*sum = 0;
+	for (i=first; i<=last; ++i)
+		*sum = compute_checksum (*sum, ram[i]);
+	write (drum, sum, 8);
+}
+
+int drum_read (int addr, int first, int last, uint64_t *sum)
+{
+	int len, i;
+	uint64_t old_sum;
+
+	if (trace)
+		printf ("\tчтение МБ %05o память %04o-%04o\n",
+			addr, first, last);
+	lseek (drum, addr * 8L, 0);
+	len = (last - first + 1) * 8;
+	if (len <= 0 || len > (040000 - addr) * 8)
+		uerror ("неверная длина чтения МБ: %d байт", len);
+	if (read (drum, &ram [first], len) != len)
+		uerror ("ошибка записи на МБ: %d байт", len);
+	for (i=first; i<=last; ++i) {
+		if (ram[i] >> 45)
+			uerror ("чтение неинициализированного барабана %05o",
+				addr + i - first);
+		ram_dirty[i] = 1;
+	}
+	if (! sum)
+		return 0;
+
+	/* Считываем и проверяем контрольную сумму. */
+	read (drum, &old_sum, 8);
+	*sum = 0;
+	for (i=first; i<=last; ++i)
+		*sum = compute_checksum (*sum, ram[i]);
+	return (old_sum == *sum);
 }
 
 /*
@@ -653,16 +770,18 @@ int ext_io (int a1, uint64_t *sum)
 	if (ext_op & EXT_DRUM) {
 		/* Барабан */
 		if (ext_op & EXT_WRITE) {
-			drum_write ((ext_op & EXT_UNIT), ext_disk_addr,
-				ext_ram_start, ext_ram_finish);
+			drum_write ((ext_op & EXT_UNIT) << 12 | ext_disk_addr,
+				ext_ram_start, ext_ram_finish,
+				(ext_op & EXT_DIS_CHECK) ? 0 : sum);
 			return 1;
 		} else {
-			if (drum_read ((ext_op & EXT_UNIT), ext_disk_addr,
-			  ext_ram_start, ext_ram_finish))
+			if (drum_read ((ext_op & EXT_UNIT) << 12 | ext_disk_addr,
+			    ext_ram_start, ext_ram_finish,
+			    (ext_op & EXT_DIS_CHECK) ? 0 : sum))
 				return 1;
 			if (! (ext_op & EXT_DIS_STOP))
-				uerror ("ошибка чтения барабана: %d %04o %04o %04o",
-					(ext_op & EXT_UNIT), ext_disk_addr,
+				uerror ("ошибка чтения барабана: %04o %04o %04o %04o",
+					ext_op, ext_disk_addr,
 					ext_ram_start, ext_ram_finish);
 			return 0;
 		}
@@ -712,8 +831,7 @@ void run ()
 		if (RVK >= DATSIZE)
 			uerror ("выход за пределы памяти");
 		if (! ram_dirty [RVK])
-			uerror ("выполнение неинициализированного слова памяти: %02o",
-				RVK);
+			uerror ("выполнение неинициализированного слова памяти");
 		RK = ram [RVK];
 		if (trace) {
 			printf ("%8.6f) %04o: ", clock, RVK);
@@ -1229,7 +1347,7 @@ usage:		printf ("Симулятор M-20\n");
 	readimage (input);
 	if (trace)
 		printf ("Прочитан файл %s\n", infile);
-
+	drum = drum_open ();
 	if (trace)
 		printf ("Пуск...\r\n");
 	run ();
