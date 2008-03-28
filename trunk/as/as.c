@@ -10,6 +10,7 @@
 #include <wchar.h>
 #include "config.h"
 #include "encoding.h"
+#include "gost10859.h"
 #include "ieee.h"
 
 #define STSIZE          2000    /* размер таблицы символов */
@@ -21,17 +22,20 @@
 /*
  * Lexical items.
  */
-#define LEOF	0	/* конец файла */
-#define LEOL	1	/* конец строки */
-#define LNUM	2	/* число */
-#define LNAME	3	/* имя */
-#define LCMD	4	/* машинная инструкция */
-#define LEQU	5	/* .это */
-#define LDATA	6	/* .перем */
-#define LCONST	7	/* .вещ */
-#define LORG	8	/* .адрес */
-#define LLSHIFT	9	/* << */
-#define LRSHIFT	10	/* >> */
+enum {
+	LEOF,		/* конец файла */
+	LEOL,		/* конец строки */
+	LNUM,		/* число */
+	LNAME,		/* имя */
+	LCMD,		/* машинная инструкция */
+	LLSHIFT,	/* << */
+	LRSHIFT,	/* >> */
+	LEQU,		/* .это */
+	LDATA,		/* .перем */
+	LCONST,		/* .вещ */
+	LORG,		/* .адрес */
+	LTEXT,		/* .текст */
+};
 
 /*
  * Symbol/expression types.
@@ -94,7 +98,6 @@ unsigned char ram_dirty [DATSIZE];
 void parse (void);
 void relocate (void);
 void libraries (void);
-void listing (void);
 void output (void);
 void makecmd (int code);
 int getexpr (int *s);
@@ -314,7 +317,6 @@ int main (int argc, char **argv)
 		libtab[nlib++].name = "/usr/local/lib/m20";
 	libraries ();
 	relocate ();
-	listing ();
 	output ();
 	return 0;
 }
@@ -534,6 +536,7 @@ skiptoeol:      while ((c = unicode_getc (stdin)) != '\n')
 			if (! wcscmp (name, L".перем")) return LDATA;
 			if (! wcscmp (name, L".адрес")) return LORG;
 			if (! wcscmp (name, L".вещ"))   return LCONST;
+			if (! wcscmp (name, L".текст")) return LTEXT;
 		}
 		if ((*pval = lookcmd()) != -1)
 			return LCMD;
@@ -717,6 +720,79 @@ void store_word (int addr, uint64_t val)
 			(int) (val >> 12) & 07777, (int) val & 07777);
 }
 
+void getstring ()
+{
+	int c, n, cval;
+	uint64_t w;
+
+	c = getlex (&cval, 0);
+	if (c != '"')
+		uerror ("нет параметра .текст");
+	n = 0;
+	w = 0;
+	for (;;) {
+		switch (c = unicode_getc (stdin)) {
+		case EOF:
+			uerror ("незакрытая текстовая строка");
+		case '"':
+			break;
+		case '\\':
+			switch (c = unicode_getc (stdin)) {
+			case EOF:
+				uerror ("незакрытая текстовая строка");
+			case '\n':
+				continue;
+			case '0': case '1': case '2': case '3':
+			case '4': case '5': case '6': case '7':
+				cval = c & 07;
+				c = unicode_getc (stdin);
+				if (c>='0' && c<='7') {
+					cval = cval<<3 | (c & 7);
+					c = unicode_getc (stdin);
+					if (c>='0' && c<='7') {
+						cval = cval<<3 | (c & 7);
+					} else unicode_ungetc (c);
+				} else unicode_ungetc (c);
+				c = cval;
+				break;
+			case 't':
+				c = '\t';
+				break;
+			case 'b':
+				c = '\b';
+				break;
+			case 'r':
+				c = '\r';
+				break;
+			case 'n':
+				c = '\n';
+				break;
+			case 'f':
+				c = '\f';
+				break;
+			}
+		default:
+			w <<= 7;
+			w |= unicode_to_gost (c);
+			n++;
+			if (n % 6 == 0) {
+				store_word (count++, w);
+				w = 0;
+			}
+			continue;
+		}
+		break;
+	}
+	if (n % 6 != 0) {
+		do {
+			w <<= 7;
+			w |= GOST_SPACE;
+			n++;
+		} while (n % 6 != 0);
+		store_word (count++, w);
+	}
+}
+
 void parse ()
 {
 	int clex, cval, tval;
@@ -776,6 +852,13 @@ void parse ()
 				stab[cval].value = count;
 				store_word (count++, getreal ());
 				break;
+			case LTEXT:		/* имя .текст "строка" */
+				if (stab[cval].type != TUNDF)
+					uerror ("имя уже определено");
+				stab[cval].type = TTEXT;
+				stab[cval].value = count;
+				getstring ();
+				break;
 			default:
 				uerror ("неверная команда");
 			}
@@ -810,6 +893,15 @@ void parse ()
 	}
 }
 
+int compare_stab (const void *pa, const void *pb)
+{
+	const struct stab *a = pa, *b = pb;
+
+	if (a->value < b->value)
+		return -1;
+	return (a->value > b->value);
+}
+
 /*
  * Write the resulting hex image.
  */
@@ -818,8 +910,10 @@ void output ()
 	int i, last_addr = -1;
 	int flags, op, a1, a2, a3;
 	uint64_t cmd;
+	struct stab *s;
 
-	printf ("; %s\n", infile1);
+	utf8_puts ("; ", stdout);
+	printf ("%s\n", infile1);
 	for (i=0; i<DATSIZE; ++i) {
 		if (! ram_dirty [i])
 			continue;
@@ -835,6 +929,39 @@ void output ()
 		a3 = cmd & 07777;
 		printf ("%o %02o %04o %04o %04o\n", flags, op, a1, a2, a3);
 	}
+
+	/*
+	 * Находим адрес начала.
+	 */
+	for (i=0; i<stabfree; ++i) {
+		if (stab[i].len == 6 && ! wcscmp (stab[i].name, L"начало")) {
+			printf ("\n@%04o\n", stab[i].value);
+			break;
+		}
+	}
+
+	/*
+	 * Выдаем таблицу символов.
+	 */
+	printf ("\n; Таблица символов\n");
+	qsort (stab, stabfree, sizeof (stab[0]), compare_stab);
+	for (s=stab; s<stab+stabfree; ++s) {
+		if (s->name[1] == '.')
+			continue;
+		switch (s->type) {
+		default:     continue;
+		case TUNDF:  i = 'U'; break;
+		case TTEXT:  i = 'T'; break;
+		case TABS:   i = 'A'; break;
+		}
+		printf ("; %04o  %c  ", s->value, i);
+		wchar_puts (s->name, stdout);
+		printf ("\n");
+	}
+	for (i=DATSIZE-1; i>0; --i)
+		if (ram_dirty [i])
+			break;
+	printf ("; %04o  T  <конец>\n", i);
 }
 
 /*
@@ -947,74 +1074,6 @@ void relocate ()
 	if (count > DATSIZE)
 		uerror ("Недостаточно памяти для программы: %d слов", count);
 	fprintf (stderr, "Свободно %d слов\n", DATSIZE - count);
-}
-
-int compare_stab (const void *pa, const void *pb)
-{
-	const struct stab *a = pa, *b = pb;
-
-	if (a->value < b->value)
-		return -1;
-	return (a->value > b->value);
-}
-
-/*
- * Print the table of symbols and text constants.
- */
-void listing ()
-{
-	struct stab *s;
-	char *p, *lstname;
-	FILE *lstfile;
-	int t, n;
-
-	lstname = malloc (4 + strlen (outfile));
-	if (! lstname)
-		uerror ("мало памяти");
-	strcpy (lstname, outfile);
-	p = strrchr (lstname, '.');
-	if (! p)
-		p = lstname + strlen (lstname);
-	strcpy (p, ".lst");
-
-	lstfile = fopen (lstname, "w");
-	if (! lstfile)
-		uerror ("не могу записать %s", lstname);
-
-	/* Sort the symbol table. */
-	qsort (stab, stabfree, sizeof (stab[0]), compare_stab);
-
-	utf8_puts ("Символы данных:\n", lstfile);
-	for (s=stab; s<stab+stabfree; ++s) {
-		if (s->name[1] == '.')
-			continue;
-		switch (s->type) {
-		default:     continue;
-		case TABS:   t = 'A'; break;
-		}
-		fprintf (lstfile, "\t%04x  %c  %.*ls\n",
-			s->value, t, s->len, s->name);
-	}
-	fprintf (lstfile, "\nСимволы команд:\n");
-	for (s=stab; s<stab+stabfree; ++s) {
-		if (s->name[1] == '.')
-			continue;
-		switch (s->type) {
-		default:     continue;
-		case TUNDF:  t = 'U'; break;
-		case TTEXT:  t = 'T'; break;
-		}
-		fprintf (lstfile, "\t%04x  %c  ", s->value, t);
-		wchar_puts (s->name, lstfile);
-		fprintf (lstfile, "\n");
-	}
-	t = 0;
-	for (n=DATSIZE-1; n>=0; --n)
-		if (ram_dirty [n]) {
-			t = n;
-			break;
-		}
-	fprintf (lstfile, "\t%04x  T  <конец>\n", t);
 }
 
 void addreloc (int addr, int sym, int flags)
