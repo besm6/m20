@@ -43,11 +43,9 @@
 #define EXT_WRITE	00004   /* 27 - Зп - запись */
 #define EXT_UNIT	00003   /* 26,25 - номер барабана или ленты */
 
-int debug;
+int trace;
 char *infile;
 double clock;			/* время выполнения, микросекунды */
-int trace_start, trace_end = -1;
-int Wflag, Rflag;
 
 int start_address;
 int RVK;			/* РВК - регистр выборки команды */
@@ -87,24 +85,6 @@ void uerror (char *s, ...)
 	va_end (ap);
 	fprintf (stderr, "\r\n");
 	quit ();
-}
-
-void set_trace (char *str)
-{
-	char *e;
-
-	trace_start = strtol (str, &e, 0);
-	if (! e || *e != ':')
-		trace_end = trace_start;
-	else
-		trace_end = strtol (e+1, 0, 0);
-}
-
-void trace (char *str)
-{
-	if (! debug)
-		return;
-	printf ("%8.6f) %04o: %s\r\n", clock, RVK, str);
 }
 
 /*
@@ -208,20 +188,16 @@ uint64_t load (int addr)
 	uint64_t val;
 
 	addr &= 07777;
-	switch (addr) {
-	case 0:
-		val = 0;
-		break;
-	default:
-		if (! ram_dirty [addr])
-			uerror ("чтение неинициализированного слова памяти: %02o",
-				addr);
-		val = ram [addr];
-		break;
-	}
-	if (Rflag && addr == Rflag)
-		printf ("%8.6f) %04o: read %04o value %015llo\r\n",
-			clock, RVK, addr, val);
+	if (addr == 0)
+		return 0;
+
+	if (! ram_dirty [addr])
+		uerror ("чтение неинициализированного слова памяти: %02o",
+			addr);
+
+	val = ram [addr];
+	if (trace > 1)
+		printf ("\t[%04o] -> %015llo\r\n", addr, val);
 	return val;
 }
 
@@ -231,9 +207,11 @@ uint64_t load (int addr)
 void store (int addr, uint64_t val)
 {
 	addr &= 07777;
-	if (Wflag && addr == Wflag)
-		printf ("%8.6f) %04o: write %04o value %015llo\r\n",
-			clock, RVK, addr, val);
+	if (addr == 0)
+		return;
+
+	if (trace > 1)
+		printf ("\t%015llo -> [%04o]\r\n", val, addr);
 	ram [addr] = val;
 	ram_dirty [addr] = 1;
 }
@@ -527,11 +505,15 @@ uint64_t square_root (uint64_t x, int no_round)
 
 void drum_write (int unit, int addr, int first, int last)
 {
+	uerror ("запись МБ %d адрес %04o память %04o-%04o",
+		unit, addr, first, last);
 	/* TODO */
 }
 
 int drum_read (int unit, int addr, int first, int last)
 {
+	uerror ("чтение МБ %d адрес %04o память %04o-%04o",
+		unit, addr, first, last);
 	/* TODO */
 	return 0;
 }
@@ -733,11 +715,10 @@ void run ()
 			uerror ("выполнение неинициализированного слова памяти: %02o",
 				RVK);
 		RK = ram [RVK];
-		if (debug > 1 ||
-		    (RVK >= trace_start && RVK <= trace_end)) {
+		if (trace) {
 			printf ("%8.6f) %04o: ", clock, RVK);
 			print_cmd (RK);
-			printf (", РА=%04o, Ω=%d\r\n", RA, OMEGA);
+			printf ("\r\n");
 		}
 		next_address = RVK + 1;
 		flags = RK >> 42 & 7;
@@ -854,7 +835,7 @@ shift:			RR = load (a2);
 			OMEGA = (RR == 0);
 			break;
 		case 074: /* сд - сдвиг по порядку числа */
-			x = (int) (load (a1) >> 36 & 0177) - 64;
+			n = (int) (load (a1) >> 36 & 0177) - 64;
 			cycle (24 + 1.5 * (n>0 ? n : -n));
 			goto shift;
 		case 007: /* слц - циклическое сложение */
@@ -1065,6 +1046,9 @@ addexp:			RR = add_exponent (y, n);
 			goto addexp;
 		}
 		ext_op = 07777;
+		if (trace > 1)
+			printf ("\tРА=%04o, Ω=%d, РР=%015llo\r\n",
+				RA, OMEGA, RR);
 	}
 }
 
@@ -1216,37 +1200,7 @@ int main (int argc, char **argv)
 		case '-':
 			for (cp=argv[i]; *cp; cp++) switch (*cp) {
 			case 't':
-				debug++;
-				break;
-			case 'T':
-				if (cp [1]) {
-					/* -Targ */
-					set_trace (cp + 1);
-					while (*++cp);
-					--cp;
-				} else if (i+1 < argc)
-					/* -T arg */
-					set_trace (argv[++i]);
-				break;
-			case 'W':
-				if (cp [1]) {
-					/* -Warg */
-					Wflag = strtol (cp+1, 0, 0);
-					while (*++cp);
-					--cp;
-				} else if (i+1 < argc)
-					/* -W arg */
-					Wflag = strtol (argv[++i], 0, 0);
-				break;
-			case 'R':
-				if (cp [1]) {
-					/* -Rarg */
-					Rflag = strtol (cp+1, 0, 0);
-					while (*++cp);
-					--cp;
-				} else if (i+1 < argc)
-					/* -R arg */
-					Rflag = strtol (argv[++i], 0, 0);
+				trace++;
 				break;
 			}
 			break;
@@ -1273,10 +1227,10 @@ usage:		printf ("Симулятор M-20\n");
 	}
 
 	readimage (input);
-	if (debug)
+	if (trace)
 		printf ("Прочитан файл %s\n", infile);
 
-	if (debug)
+	if (trace)
 		printf ("Пуск...\r\n");
 	run ();
 
