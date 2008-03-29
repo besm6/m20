@@ -13,6 +13,8 @@
   * Начата реализация библиотеки стандартных программ (в файле [http://code.google.com/p/m20/source/browse/trunk/as/stdprog.m20 as/stdprog.m20]). Пока имеется только СП-05 - вычисление sin(x). Пример вызова СП-05 расположен в файле [http://code.google.com/p/m20/source/browse/trunk/as/example4.m20 as/example4.m20].
 
 === Планы развития ===
-  * Тщательное тестирование корректности выполнения инструкций.
-  * Отладка [http://code.google.com/p/m20/source/browse/trunk/as/example2.m20 примера 2]. Сейчас печатается неверный ответ.
-  * Отладка [http://code.google.com/p/m20/source/browse/trunk/as/example4.m20 примера 4]. Останавливается с диагностикой "чтение неинициализированного слова памяти".
+  * Тщательно протестировать корректность выполнения инструкций.
+  * Отладить [http://code.google.com/p/m20/source/browse/trunk/as/example2.m20 примера 2]. Сейчас печатается неверный ответ.
+  * Отладить [http://code.google.com/p/m20/source/browse/trunk/as/example4.m20 примера 4]. Останавливается с диагностикой "чтение неинициализированного слова памяти".
+  * Документировать язык ассемблера.
+  * Реализовать компилятор Си, взяв за основу [http://vak.ru/doku.php/proj/pic/pic17-c-compiler cc17].
