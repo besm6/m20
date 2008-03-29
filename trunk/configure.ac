@@ -6,10 +6,12 @@ AC_INIT([m20], [0.1], [serge@vak.ru])
 AM_INIT_AUTOMAKE(m20, 0.1, no-define)
 AC_CONFIG_SRCDIR([as/dis.c])
 AC_CONFIG_HEADER([config.h])
-AC_CONFIG_FILES([Makefile as/Makefile])
+AC_CONFIG_FILES([Makefile as/Makefile cc/Makefile])
 
 # Checks for programs.
 AC_PROG_CC
+AC_PROG_YACC
+AM_PROG_LEX
 
 # Checks for libraries.
 

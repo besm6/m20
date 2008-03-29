@@ -1,4 +1,4 @@
-SUBDIRS = . as
+SUBDIRS = . as cc
 
 clean-local:
 	-rm -rf *~
