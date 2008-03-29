@@ -154,7 +154,7 @@ void readimage (FILE *input)
 	int addr, type;
 	uint64_t word;
 
-	addr = 0;
+	addr = 1;
 	start_address = 1;
 	while (read_line (input, &type, &word)) {
 		switch (type) {
@@ -935,7 +935,7 @@ shm:			y = load (a2);
 			else if (n < 0)
 				RR |= (y & MANTISSA) >> -n;
 			store (a3, RR);
-			OMEGA = (RR == 0);
+			OMEGA = ((RR & MANTISSA) == 0);
 			break;
 		case 034: /* сдм - сдвиг мантиссы по порядку числа */
 			n = (int) (load (a1) >> 36 & 0177) - 64;
