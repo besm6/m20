@@ -23,5 +23,8 @@ svn checkout http://m20.googlecode.com/svn/trunk/ m20-read-only
   * Документировать формат входного файла эмулятора.
   * Документировать язык ассемблера.
   * Добавить поддержку кодировок koi8-r, cp1251 и cp866. Сейчас эмулятор будет правильно работать только на системах с локальной кодировкой Unicode utf-8. 
-  * Разыскать коды трансляторов [http://www.osp.ru/cw/1999/45/38679/ Алгол-60 для М-20]: [http://www.computer-museum.ru/histsoft/ta-1m.htm ТА-1] (имени [http://www.osp.ru/cw/2004/29/78845/ Лаврова]), ТА-2 (имени [http://www.rustrana.ru/print.php?nid=5602 Шуры-Буры]) и Альфа (имени [http://www.computer-museum.ru/galglory/ershov1.htm Ершова]). Запустить Алгол на эмуляторе.
+  * Разыскать коды трансляторов [http://www.osp.ru/cw/1999/45/38679/ Алгол-60 для М-20]:
+    * [http://www.computer-museum.ru/histsoft/ta-1m.htm ТА-1м] (имени [http://www.osp.ru/cw/2004/29/78845/ Лаврова]), 
+    * [http://www.computer-museum.ru/histsoft/ta-2m.htm ТА-2м] (имени [http://www.rustrana.ru/print.php?nid=5602 Шуры-Буры]);
+    * Альфа (имени [http://www.computer-museum.ru/galglory/ershov1.htm Ершова]).
   * Реализовать компилятор Си, взяв за основу [http://vak.ru/doku.php/proj/pic/pic17-c-compiler cc17].
