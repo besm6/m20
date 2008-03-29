@@ -10,7 +10,7 @@ svn checkout http://m20.googlecode.com/svn/trunk/ m20-read-only
 
   * Создан ассемблер с мнемоникой, близкой к БЭСМ-6. Имеется также простой дизассемблер.
   * В эмуляторе реализованы все машинные инструкции, включая обращения к внешним устройствам.
-  * Работает [http://code.google.com/p/m20/source/browse/trunk/as/example1.m20 пример 1], вычисляя и печатая правильный ответ. 
+  * Работают [http://code.google.com/p/m20/source/browse/trunk/as/example1.m20 пример 1] и [http://code.google.com/p/m20/source/browse/trunk/as/example2.m20 пример 2], вычисляя и печатая правильные значения. 
   * Работает печать на АЦПУ: десятичные, восьмеричные числа, а также текстовая информация. В файле [http://code.google.com/p/m20/source/browse/trunk/as/example3.m20 as/example3.m20] имеется пример печати.
   * Выполняется обмен с магнитным барабаном. Образ барабана (16 килослов) хранится в файле $HOME/.m20/drum.bin.
   * Коды интерпретирующей системы ИС-2 размещены в файле [http://code.google.com/p/m20/source/browse/trunk/as/is2.m20 as/is2.m20].
@@ -18,7 +18,6 @@ svn checkout http://m20.googlecode.com/svn/trunk/ m20-read-only
 
 === Планы развития ===
   * Тщательно протестировать корректность выполнения инструкций.
-  * Отладить [http://code.google.com/p/m20/source/browse/trunk/as/example2.m20 пример 2]. Сейчас печатается неверный ответ.
   * Отладить [http://code.google.com/p/m20/source/browse/trunk/as/example4.m20 пример 4]. Останавливается с диагностикой "чтение неинициализированного слова памяти".
   * Документировать формат входного файла эмулятора.
   * Документировать язык ассемблера.
