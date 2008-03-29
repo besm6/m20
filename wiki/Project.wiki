@@ -22,5 +22,5 @@ svn checkout http://m20.googlecode.com/svn/trunk/ m20-read-only
   * Отладить [http://code.google.com/p/m20/source/browse/trunk/as/example4.m20 пример 4]. Останавливается с диагностикой "чтение неинициализированного слова памяти".
   * Документировать формат входного файла эмулятора.
   * Документировать язык ассемблера.
-  * Разыскать коды трансляторов с языка [http://www.osp.ru/cw/1999/45/38679/ Алгол-60 для М-20]: ТА-1 (имени [http://www.osp.ru/cw/2004/29/78845/ Лаврова]), ТА-2 (имени [http://www.rustrana.ru/print.php?nid=5602 Шуры-Буры]) и Альфа (имени [http://www.computer-museum.ru/galglory/ershov1.htm Ершова]). Запустить Алгол на эмуляторе.
+  * Разыскать коды трансляторов [http://www.osp.ru/cw/1999/45/38679/ Алгол-60 для М-20]: ТА-1 (имени [http://www.osp.ru/cw/2004/29/78845/ Лаврова]), ТА-2 (имени [http://www.rustrana.ru/print.php?nid=5602 Шуры-Буры]) и Альфа (имени [http://www.computer-museum.ru/galglory/ershov1.htm Ершова]). Запустить Алгол на эмуляторе.
   * Реализовать компилятор Си, взяв за основу [http://vak.ru/doku.php/proj/pic/pic17-c-compiler cc17].
