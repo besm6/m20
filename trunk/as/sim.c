@@ -28,6 +28,7 @@
 #define SIGN		00200000000000000LL	/* 44-й бит-знак */
 #define BIT37		00001000000000000LL	/* 37-й бит */
 #define BIT19		00000000001000000LL	/* 19-й бит */
+#define WORD		00777777777777777LL	/* биты 45..1 */
 #define MANTISSA	00000777777777777LL	/* биты 36..1 */
 
 /*
@@ -859,7 +860,7 @@ void run ()
 			uerror ("неверная команда: %02o", op);
 			continue;
 		/*
-		 * Логические операции
+		 * Логические операции.
 		 */
 		case 000: /* зп - пересылка */
 			RR = load (a1);
@@ -881,18 +882,13 @@ void run ()
 			/* Омега не изменяется. */
 			cycle (24);
 			break;
-		case 015: /* нтж - поразрядное сравнение (исключаищее или) */
+		case 015: /* нтж - поразрядное сравнение (исключающее или) */
+		case 035: /* нтжс - поразрядное сравнение с остановом */
 			RR = load (a1) ^ load (a2);
 logop:			store (a3, RR);
 			OMEGA = (RR == 0);
 			cycle (24);
-			break;
-		case 035: /* нтжс - поразрядное сравнение с остановом */
-			RR = load (a1) ^ load (a2);
-			store (a3, RR);
-			OMEGA = (RR == 0);
-			cycle (24);
-			if (! OMEGA)
+			if (op == 035 && ! OMEGA)
 				uerror ("останов по несовпадению: РР=%015llo", RR);
 			break;
 		case 055: /* и - логическое умножение (и) */
@@ -916,7 +912,7 @@ addm:			RR = (x & ~MANTISSA) | (y & MANTISSA);
 		case 053: /* слко - сложение кодов операций */
 			x = load (a1);
 			y = (x & ~MANTISSA) + (load (a2) & ~MANTISSA);
-addop:			RR = (x & MANTISSA) | (y & ~MANTISSA);
+addop:			RR = (x & MANTISSA) | (y & ~MANTISSA & WORD);
 			store (a3, RR);
 			OMEGA = (y & BIT46) != 0;
 			cycle (24);
@@ -946,7 +942,7 @@ shm:			y = load (a2);
 			cycle (61.5 + 1.5 * (n>0 ? n : -n));
 shift:			RR = load (a2);
 			if (n > 0)
-				RR <<= n;
+				RR = (RR << n) & WORD;
 			else if (n < 0)
 				RR >>= -n;
 			store (a3, RR);
@@ -961,12 +957,11 @@ shift:			RR = load (a2);
 			y = load (a2);
 			RR = (x & ~MANTISSA) + (y & ~MANTISSA);
 			y = (x & MANTISSA) + (y & MANTISSA);
-csum:			if (RR & BIT46) {
+csum:			if (RR & BIT46)
 				RR += BIT37;
-				RR &= ~BIT46;
-			}
 			if (y & BIT37)
 				y += 1;
+			RR &= WORD;
 			RR |= y & MANTISSA;
 			store (a3, RR);
 			OMEGA = (y & BIT37) != 0;
@@ -982,10 +977,12 @@ csum:			if (RR & BIT46) {
 			x = load (a1);
 			RR = (x & 07777777) << 24 | (x >> 24 & 07777777);
 			store (a3, RR);
+			/* Омега не изменяется. */
 			cycle (60);
 			break;
 		/*
-		 * Операции управления
+		 * Операции управления.
+		 * Омега не изменяется.
 		 */
 		case 016: /* пв - передача управления с возвратом */
 			RR = 016000000000000LL | (a1 << 12);
@@ -1083,7 +1080,7 @@ csum:			if (RR & BIT46) {
 			cycle (24);
 			break;
 		/*
-		 * Арифметические операции
+		 * Арифметические операции.
 		 */
 		case 001: /* сл - сложение с округлением и нормализацией */
 		case 021: /* слбо - сложение без округления с нормализацией */
@@ -1141,7 +1138,7 @@ add:			RR = addition (x, y, op >> 4 & 1, op >> 5 & 1);
 		case 047: /* счмр - выдача младших разрядов произведения */
 			RR = RMR;
 			store (a3, RR);
-			OMEGA = (int) (RR >> 36 & 0177) > 0100;
+			OMEGA = (RR & MANTISSA) == 0;
 			cycle (24);
 			break;
 		case 006: /* слпа - сложение порядка с адресом */
