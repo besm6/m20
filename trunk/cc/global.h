@@ -30,19 +30,17 @@ typedef struct {
 	long addr;              /* @ address */
 } sym_t;
 
-#define TPTR    0x10
-#define TFUNC   0x40
-#define TMASK   0x0f
+#define TPTR	0x10
+#define TFUNC	0x40
+#define TMASK	0x0f
 
-#define TVOID   1
-#define TCHAR   2
-#define TSHORT  3
-#define TLONG   4
+#define TVOID	1
+#define TCHAR	2
+#define TINT	3
 
-#define TVOIDP  (TVOID  | TPTR)
-#define TCHARP  (TCHAR  | TPTR)
-#define TSHORTP (TSHORT | TPTR)
-#define TLONGP  (TLONG  | TPTR)
+#define TVOIDP	(TVOID | TPTR)
+#define TCHARP	(TCHAR | TPTR)
+#define TINTP	(TINT  | TPTR)
 
 #define LEAF(op)        (! ((op) & 0x300))
 #define UNARY(op)       ((op) & 0x100)

@@ -223,10 +223,10 @@ int makename ()
 	case 'f': if (! strcmp (yytext, "for"))       return FOR;       break;
 	case 'g': if (! strcmp (yytext, "goto"))      return GOTO;      break;
 	case 'i': if (! strcmp (yytext, "if"))        return IF;
-		  if (! strcmp (yytext, "int"))       return CHAR;      break;
-	case 'l': if (! strcmp (yytext, "long"))      return LONG;      break;
+		  if (! strcmp (yytext, "int"))       return INT;       break;
+	case 'l': if (! strcmp (yytext, "long"))      return INT;       break;
 	case 'r': if (! strcmp (yytext, "return"))    return RETURN;    break;
-	case 's': if (! strcmp (yytext, "short"))     return SHORT;
+	case 's': if (! strcmp (yytext, "short"))     return INT;
 		  if (! strcmp (yytext, "sizeof"))    return SIZEOF;
 		  if (! strcmp (yytext, "struct"))    return STRUCT;
 		  if (! strcmp (yytext, "switch"))    return SWITCH;    break;
@@ -349,8 +349,7 @@ void printlex (int lex)
 	case SIZEOF:    printf ("SIZEOF\n"); break;
 	case ASM:       printf ("ASM\n"); break;
 	case CHAR:      printf ("CHAR\n"); break;
-	case SHORT:     printf ("SHORT\n"); break;
-	case LONG:      printf ("LONG\n"); break;
+	case INT:       printf ("INT\n"); break;
 	case VOID:      printf ("VOID\n"); break;
 	}
 }

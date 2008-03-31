@@ -303,8 +303,7 @@ void prtype (int type)
 	case 0:      break;
 	case TVOID:  printf ("void ");  break;
 	case TCHAR:  printf ("char ");  break;
-	case TSHORT: printf ("short "); break;
-	case TLONG:  printf ("long ");  break;
+	case TINT:   printf ("int  ");  break;
 	default:     printf ("?type%d ", type & TMASK); break;
 	}
 }
@@ -371,8 +370,7 @@ void nprint (node_t *n, int off)
 		case 0:      break;
 		case TVOID:  printf ("void");  break;
 		case TCHAR:  printf ("char");  break;
-		case TSHORT: printf ("short"); break;
-		case TLONG:  printf ("long");  break;
+		case TINT:   printf ("int");   break;
 		default:     printf ("?type%d", n->type & TMASK); break;
 		}
 		if (n->type & TPTR)
@@ -569,34 +567,13 @@ divzero:                error ("division by 0");
 	nfree (n);
 	if (l->lval <= 0xff)
 		l->type = TCHAR;
-	else if (l->lval <= 0xffff)
-		l->type = TSHORT;
 	else
-		l->type = TLONG;
+		l->type = TINT;
 	return l;
 }
 
 void compile (node_t *f, node_t *def, node_t *o)
 {
-	/* Make the function header. */
-	declfun (f->left);
-
-	/* Allocate the space for the arguments. */
-	if (f->right) {
-		node_t *n = f->right = rightrec (f->right);
-		while (n->op == OP_COMMA) {
-			node_t *r = n->right;
-			if (n->left->op == OP_NAME)
-				declvar (n->left);
-			n = r;
-		}
-		if (n->op == OP_NAME)
-			declvar (n);
-
-		/* Initialize arguments. */
-		initargs (f->right);
-	}
-
 	/* Define local variables. */
 	if (def) {
 		node_t *n = rightrec (def);
@@ -610,9 +587,25 @@ void compile (node_t *f, node_t *def, node_t *o)
 			declvar (n);
 	}
 
+	/* Allocate the space for the arguments. */
+	if (f->right) {
+		node_t *n = f->right = rightrec (f->right);
+		while (n->op == OP_COMMA) {
+			node_t *r = n->right;
+			if (n->left->op == OP_NAME)
+				declvar (n->left);
+			n = r;
+		}
+		if (n->op == OP_NAME)
+			declvar (n);
+	}
+
+	/* Make the function header. */
+	declfun (f->left);
+
 	/* Compile the function body. */
 	operator (canonconst (o));
-	output (ASM_RETURN);
+	output (ASM_RETURN, f->left);
 }
 
 node_t *negate (node_t *n)
@@ -1066,7 +1059,7 @@ void call (node_t *name, node_t *a)
 	}
 	if (a1)
 		expr2 (a1, TARG_ACC);
-	output (ASM_CALL, name);
+	output (ASM_CALL, name, name);
 }
 
 /*
@@ -1191,10 +1184,8 @@ done:                   nfree (n->right);
 #if 1
 			if (q->lval < 0x100)
 				q->type = TCHAR;
-			else if (q->lval < 0x10000)
-				q->type = TSHORT;
 			else
-				q->type = TLONG;
+				q->type = TINT;
 #endif
 			return q;
 		}
