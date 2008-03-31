@@ -37,7 +37,7 @@ void yyerror (char *msg)
 
 %term   ANDAND OROR INC DEC EQUOP NEQOP LE GE LSOP RSOP STRUCT
 	RETURN GOTO IF ELSE SWITCH BREAK CONTINUE WHILE DO FOR DEFAULT CASE
-	SIZEOF ASM CHAR SHORT LONG VOID
+	SIZEOF ASM CHAR INT VOID
 
 %token <lval>   CON
 %token <strval> NAME STRING
@@ -82,7 +82,7 @@ declaration:    type decl_list ';'  { node_t *n = rightrec ($2);
 					declvar (n);
 				      nfree (n);
 				      sfree (); }
-	      | type function o_addr '{'
+	      | type function '{'
 				    { level = 1;
 				      func = stab + $2->left->rval;
 				      if (stab[$2->left->rval].size)
@@ -90,11 +90,10 @@ declaration:    type decl_list ';'  { node_t *n = rightrec ($2);
 					  stab[$2->left->rval].name);
 				      stab[$2->left->rval].size = 1; }
 		fdecl_list stmt_list '}'
-				    { stab[$2->left->rval].addr = $3;
-				      compile ($2, $6, $7);
+				    { compile ($2, $5, $6);
 				      twalk ($2, nfree);
+				      twalk ($5, nfree);
 				      twalk ($6, nfree);
-				      twalk ($7, nfree);
 				      sfree (); level = 0; }
 	      | ASM '(' STRING ')' ';'
 				    { outstr ($3); }
@@ -124,8 +123,7 @@ function:       '*' NAME '('     { fnode = deffun ($2, type|TPTR); }
 	      ;
 
 type:           CHAR             { $$ = type = TCHAR; }
-	      | SHORT            { $$ = type = TSHORT; }
-	      | LONG             { $$ = type = TLONG; }
+	      | INT              { $$ = type = TINT; }
 	      | VOID             { $$ = type = TVOID; }
 	      ;
 
@@ -278,13 +276,11 @@ term:           term INC                 { $$ = node (OP_POSTINC, $1, 0); }
 	      | '(' e ')'                { $$ = $2; }
 	      ;
 
-cast:           CHAR             { $$ = TCHAR;    }
-	      | CHAR '*'         { $$ = TCHARP;   }
-	      | SHORT            { $$ = TSHORT;   }
-	      | SHORT '*'        { $$ = TSHORTP;  }
-	      | LONG             { $$ = TLONG;    }
-	      | LONG '*'         { $$ = TLONGP;   }
-	      | VOID '*'         { $$ = TVOIDP;   }
+cast:           CHAR             { $$ = TCHAR;	}
+	      | CHAR '*'         { $$ = TCHARP;	}
+	      | INT              { $$ = TINT;	}
+	      | INT '*'          { $$ = TINTP;	}
+	      | VOID '*'         { $$ = TVOIDP;	}
 	      ;
 %%
 
@@ -407,8 +403,9 @@ static node_t *mkconst (unsigned long val)
 {
 	int type;
 
-	if (val <= 0xff)        type = TCHAR;
-	else if (val <= 0xffff) type = TSHORT;
-	else                    type = TLONG;
+	if (val <= 0xff)
+		type = TCHAR;
+	else
+		type = TINT;
 	return leaf (OP_CONST, type, val, 0);
 }
