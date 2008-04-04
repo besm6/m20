@@ -13,12 +13,10 @@ svn checkout http://m20.googlecode.com/svn/trunk/ m20-read-only
   * Работают [http://code.google.com/p/m20/source/browse/trunk/as/example1.m20 пример 1] и [http://code.google.com/p/m20/source/browse/trunk/as/example2.m20 пример 2], вычисляя и печатая правильные значения. 
   * Работает печать на АЦПУ: десятичные, восьмеричные числа, а также текстовая информация. В файле [http://code.google.com/p/m20/source/browse/trunk/as/example3.m20 as/example3.m20] имеется пример печати.
   * Выполняется обмен с магнитным барабаном. Образ барабана (16 килослов) хранится в файле $HOME/.m20/drum.bin.
-  * Коды интерпретирующей системы ИС-2 размещены в файле [http://code.google.com/p/m20/source/browse/trunk/as/is2.m20 as/is2.m20].
+  * Работает интерпретирующая система, пример вызова стандартной программы sin(x) можно посмотреть в файле [http://code.google.com/p/m20/source/browse/trunk/as/example4.m20 as/example4.m20] . Коды ИС-2 размещены в файле [http://code.google.com/p/m20/source/browse/trunk/as/is2.m20 as/is2.m20].
   * Начата реализация библиотеки стандартных программ (в файле [http://code.google.com/p/m20/source/browse/trunk/as/stdprog.m20 as/stdprog.m20]). Пока имеется только СП-05 - вычисление sin(x). Пример вызова СП-05 расположен в файле [http://code.google.com/p/m20/source/browse/trunk/as/example4.m20 as/example4.m20].
 
 === Планы развития ===
-  * Тщательно протестировать корректность выполнения инструкций.
-  * Отладить [http://code.google.com/p/m20/source/browse/trunk/as/example4.m20 пример 4]. Останавливается с диагностикой "чтение неинициализированного слова памяти".
   * Документировать формат входного файла эмулятора.
   * Документировать язык ассемблера.
   * Добавить поддержку кодировок koi8-r, cp1251 и cp866. Сейчас эмулятор будет правильно работать только на системах с локальной кодировкой Unicode utf-8. 
