@@ -97,6 +97,10 @@ void uerror (char *s, ...)
  */
 char *skip_spaces (char *p)
 {
+	if (*p == (char) 0xEF && p[1] == (char) 0xBB && p[2] == (char) 0xBF) {
+		/* Skip zero width no-break space. */
+		p += 3;
+	}
 	while (*p == ' ' || *p == '\t')
 		++p;
 	return p;
