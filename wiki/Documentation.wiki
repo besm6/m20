@@ -7,7 +7,7 @@
   * [http://m20.googlecode.com/svn/doc/M-220-external-devices-control.pdf Управление внешними устройствами] (1.9 Мб).
   * [http://m20.googlecode.com/svn/doc/M-220-interpreting-system.pdf Описание и коды интерпретирующей системы] (2.9 Мб).
 
-М.Р.Шура-Бура, В.С.Штаркман "[http://code.google.com/p/m20/source/browse/doc/M-20-guide.pdf Вычислительная машина М-20]", Москва ЦБТИ 1962 (7.7 Мб).
+М.Р.Шура-Бура, В.С.Штаркман "[http://m20.googlecode.com/svn/doc/M-20-guide.pdf Вычислительная машина М-20]", Москва ЦБТИ 1962 (7.7 Мб).
 
 [http://m20.googlecode.com/svn/doc/M-20-Kaissa.pdf Исходные коды шахматной программы "Каисса"] для М-20.
 
