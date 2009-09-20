@@ -4,245 +4,276 @@
  * Copyright (c) 2009, Serge Vakulenko
  */
 #include "m20_defs.h"
+#include <math.h>
 
-#if 1
-#include <ctype.h>
-
-t_stat parse_sym_m (char *cptr, t_value *val, int32 sw);
-void m20_init (void);
-
-extern DEVICE cpu_dev;
+extern t_value M [MEMSIZE];
+extern uint32 RVK;
 extern UNIT cpu_unit;
-extern DEVICE tti_dev, tto_dev;
-extern DEVICE ptr_dev, ptp_dev;
-extern REG cpu_reg[];
-extern uint32 M[];
-extern uint32 PC;
-extern uint32 ts_flag;
-extern int32 sim_switches;
-extern int32 flex_to_ascii[128], ascii_to_flex[128];
-
-extern void (*sim_vm_fprint_addr) (FILE *st, DEVICE *dptr, t_addr addr);
-extern t_addr (*sim_vm_parse_addr) (DEVICE *dptr, char *cptr, char **tptr);
 
 /*
- * SCP data structures and interface routines
+ * Преобразование вещественного числа в формат М-20.
  *
- * sim_name		simulator name string
- * sim_PC		pointer to saved PC register descriptor
- * sim_emax		maximum number of words for examine/deposit
- * sim_devices		array of pointers to simulated devices
- * sim_stop_messages	array of pointers to stop messages
- * sim_load		binary loader
+ * Представление чисел в IEEE 754 (double):
+ *	64   63———53 52————–1
+ *	знак порядок мантисса
+ * Старший (53-й) бит мантиссы не хранится и всегда равен 1.
+ *
+ * Представление чисел в M-20:
+ *	44   43—--37 36————–1
+ *      знак порядок мантисса
  */
-
-char sim_name[] = "M-20";
-
-REG *sim_PC = &cpu_reg[0];
-
-int32 sim_emax = 1;
-
-DEVICE *sim_devices[] = {
-	&cpu_dev,
-	&tti_dev,
-	&tto_dev,
-	&ptr_dev,
-	&ptp_dev,
-	NULL
-};
-
-const char *sim_stop_messages[] = {
-	"Unknown error",
-	"STOP",
-	"Breakpoint",
-	"Arithmetic overflow"
-};
-
-/* Binary loader - implements a restricted form of subroutine 10.4
-
-   Switches:
-         -t, input file is transposed Flex
-         -n, no checksums on v commands (10.0 compatible)
-        default is ASCII encoded Flex
-   Commands (in bits 0-3):
-        (blank)         instruction
-        +               command (not supported)
-        ;               start fill
-        /               set modifier
-        .               stop and transfer
-        ,               hex words
-        v               hex fill (checksummed unless -n)
-        8               negative instruction
-*/
-
-/*
- * Utility routine - read characters until ' (conditional stop)
- */
-t_stat load_getw (FILE *fi, uint32 *wd)
+t_value ieee_to_m20 (double d)
 {
-	int32 flex, c;
+	t_value word;
+	int exponent;
+	int sign;
 
-	*wd = 0;
-	while ((c = fgetc (fi)) != EOF) {
-		if (sim_switches & SWMASK ('T'))
-			flex = ((c << 1) | (c >> 5)) & 0x3F;
-		else
-			flex = ascii_to_flex[c & 0x7F];
-		if ((flex == FLEX_CR) || (flex == FLEX_DEL) ||
-		    (flex == FLEX_UC) || (flex == FLEX_LC) ||
-		    (flex == FLEX_BS) || (flex < 0))
-			continue;
-		if (flex == FLEX_CSTOP)
-			return SCPE_OK;
-		*wd = (*wd << 4) | ((flex >> 2) & 0xF);
+	sign = d < 0;
+	if (sign)
+		d = -d;
+	d = frexp (d, &exponent);
+	/* 0.5 <= d < 1.0 */
+	d = ldexp (d, 36);
+	word = d;
+	if (d - word >= 0.5)
+		word += 1;		/* Округление. */
+	if (exponent < -64)
+		exponent = -64;		/* Близкое к нулю число */
+	if (exponent > 63) {
+		word = 0xfffffffffLL;
+		exponent = 63;		/* Максимальное число */
 	}
-	return SCPE_FMT;
+	word |= ((t_value) (exponent + 64)) << 36;
+	word |= (t_value) sign << 43;	/* Знак. */
+	return word;
 }
 
 /*
- * Utility routine - convert ttss decimal address to binary
+ * Пропуск пробелов.
  */
-t_stat load_geta (uint32 wd, uint32 *ad)
+char *skip_spaces (char *p)
 {
-	uint32 n1, n2, n3, n4, tr, sc;
-
-	n1 = (wd >> 12) & 0xF;
-	n2 = (wd >> 8) & 0xF;
-	n3 = (wd >> 4) & 0xF;
-	n4 = wd & 0xF;
-	if ((n2 > 9) || (n4 > 9))
-		return SCPE_ARG;
-	tr = (n1 * 10) + n2;
-	sc = (n3 * 10) + n4;
-	if ((tr >= NTK_30) || (sc >= NSC_30))
-		return SCPE_ARG;
-	*ad = (tr * NSC_30) + sc;
-	return SCPE_OK;
+	if (*p == (char) 0xEF && p[1] == (char) 0xBB && p[2] == (char) 0xBF) {
+		/* Skip zero width no-break space. */
+		p += 3;
+	}
+	while (*p == ' ' || *p == '\t')
+		++p;
+	return p;
 }
 
 /*
- * Loader proper
+ * Чтение строки входного файла.
  */
-t_stat sim_load (FILE *fi, char *cptr, char *fnam, int flag)
+t_stat m20_read_line (FILE *input, int *type, t_value *val)
 {
-	uint32 wd, origin, amod, csum, cnt, tr, sc, ad, cmd;
+	char buf [512], *p;
+	int i;
+again:
+	if (! fgets (buf, sizeof (buf), input)) {
+		*type = 0;
+		return SCPE_OK;
+	}
+	p = skip_spaces (buf);
+	if (*p == '\n' || *p == ';')
+		goto again;
+	if (*p == ':') {
+		/* Адрес размещения данных. */
+		*type = ':';
+		*val = strtol (p+1, 0, 8);
+		return SCPE_OK;
+	}
+	if (*p == '@') {
+		/* Стартовый адрес. */
+		*type = '@';
+		*val = strtol (p+1, 0, 8);
+		return SCPE_OK;
+	}
+	if (*p == '=') {
+		/* Вещественное число. */
+		*type = '=';
+		*val = ieee_to_m20 (strtod (p+1, 0));
+		return SCPE_OK;
+	}
+	if (*p < '0' || *p > '7') {
+		/* неверная строка входного файла */
+		return SCPE_FMT;
+	}
 
-	origin = amod = 0;
-	for (;;) {						/* until stopped */
-		if (load_getw (fi, &wd))			/* get ctrl word */
-			break;
-		cmd = (wd >> 28) & 0xF;				/* get <0:3> */
-		switch (cmd) {					/* decode <0:3> */
-
-		case 0x2:                                       /* + command */
+	/* Слово. */
+	*type = '=';
+	*val = *p - '0';
+	for (i=0; i<14; ++i) {
+		p = skip_spaces (p + 1);
+		if (*p < '0' || *p > '7') {
+			/* слишком короткое слово */
 			return SCPE_FMT;
-
-		case 0x3:                                       /* ; start fill */
-			if (load_geta (wd, &origin))		/* origin = addr */
-				return SCPE_FMT;
-			break;
-
-		case 0x4:                                       /* / set modifier */
-			if (load_geta (wd, &amod))		/* modifier = addr */
-				return SCPE_FMT;
-			break;
-
-		case 0x5:                                       /* . transfer */
-			if (load_geta (wd, &PC))		/* PC = addr */
-				return SCPE_FMT;
-			return SCPE_OK;				/* done! */
-
-		case 0x6:                                       /* hex words */
-			if (load_geta (wd, &cnt))		/* count = addr */
-				return SCPE_FMT;
-			if ((cnt == 0) || (cnt > 63))
-				return SCPE_FMT;
-			while (cnt--) {				/* fill hex words */
-				if (load_getw (fi, &wd))
-					return SCPE_FMT;
-				Write (origin, wd);
-				origin = (origin + 1) & AMASK;
-			}
-			break;
-
-		case 0x7:					/* hex fill */
-			cnt = (wd >> 16) & 0xFFF;		/* hex count */
-			tr = (wd >> 8) & 0xFF;			/* hex track */
-			sc = wd & 0xFF;				/* hex sector */
-			if ((cnt == 0) || (cnt > 0x7FF) ||	/* validate */
-			    (tr >= NTK_30) || (sc >= NSC_30))
-				return SCPE_ARG;
-			ad = (tr * NSC_30) + sc;		/* decimal addr */
-			for (csum = 0; cnt; cnt--) {		/* fill words */
-				if (load_getw (fi, &wd))
-					return SCPE_FMT;
-				Write (ad, wd);
-				csum = (csum + wd) & MMASK;
-				ad = (ad + 1) & AMASK;
-			}
-			if (!(sim_switches & SWMASK ('N'))) {	/* unless -n, csum */
-				if (load_getw (fi, &wd))
-					return SCPE_FMT;
-				/*if ((csum ^wd) & MMASK)
-					return SCPE_CSUM; */
-			}
-			break;
-
-		case 0x0: case 0x8:				/* instructions */
-			if (load_geta (wd, &ad))		/* get address */
-				return SCPE_FMT;
-			if ((wd & 0x00F00000) != 0x00900000)	/* if not x, */
-				ad = (ad + amod) & AMASK;	/* modify */
-			wd = (wd & (SIGN|I_OP)) + (ad << I_V_EA); /* instruction */
-
-		default:					/* data word */
-			Write (origin, wd);
-			origin = (origin + 1) & AMASK;
-			break;
-		}						/* end case */
-	}							/* end for */
+		}
+		*val = *val << 3 | (*p - '0');
+	}
 	return SCPE_OK;
 }
 
 /*
- * Symbol tables
+ * Load memory from file.
  */
-static const char opcode[] = "ZBYRIDNMPEUTHCAS";
-
-static const char hex_decode[] = "0123456789FGJKQW";
-
-void m20_fprint_addr (FILE *st, DEVICE *dptr, t_addr addr)
+t_stat m20_load (FILE *input)
 {
-	if ((dptr == sim_devices[0]) &&
-	    ((sim_switches & SWMASK ('T')) ||
-	    ((cpu_unit.flags & UNIT_TTSS_D) && !(sim_switches & SWMASK ('N')))))
-		fprintf (st, "%02d%02d", addr >> 6, addr & SCMASK_30);
-	else
-		fprint_val (st, addr, dptr->aradix, dptr->awidth, PV_LEFT);
-}
+	int addr, type;
+	t_value word;
+	t_stat err;
 
-t_addr m20_parse_addr (DEVICE *dptr, char *cptr, char **tptr)
-{
-	t_addr ad, ea;
-
-	if ((dptr == sim_devices[0]) &&
-	    ((sim_switches & SWMASK ('T')) ||
-	    ((cpu_unit.flags & UNIT_TTSS_D) && !(sim_switches & SWMASK ('N'))))) {
-		ad = (t_addr) strtotv (cptr, tptr, 10);
-		if (((ad / 100) >= NTK_30) || ((ad % 100) >= NSC_30)) {
-			*tptr = cptr;
-			return 0;
+	addr = 1;
+	RVK = 1;
+	for (;;) {
+		err = m20_read_line (input, &type, &word);
+		if (err)
+			return err;
+		switch (type) {
+		case 0:			/* EOF */
+			return SCPE_OK;
+		case ':':		/* address */
+			addr = word;
+			break;
+		case '=':		/* word */
+			M [addr] = word;
+			/* ram_dirty [addr] = 1; */
+			++addr;
+			break;
+		case '@':		/* start address */
+			RVK = word;
+			break;
 		}
-		ea = ((ad / 100) * NSC_30) | (ad % 100);
-	} else
-		ea = (t_addr) strtotv (cptr, tptr, dptr->aradix);
-	return ea;
+		if (addr > MEMSIZE)
+			return SCPE_FMT;
+	}
+	return SCPE_OK;
 }
 
-void m20_vm_init (void)
+/*
+ * Dump memory to file.
+ */
+t_stat m20_dump (FILE *of, char *fnam)
 {
-	sim_vm_fprint_addr = &m20_fprint_addr;
-	sim_vm_parse_addr = &m20_parse_addr;
+	int i, last_addr = -1;
+	t_value cmd;
+
+	fprintf (of, "; %s\n", fnam);
+	for (i=1; i<MEMSIZE; ++i) {
+		if (M [i] == 0)
+			continue;
+		if (i != last_addr+1) {
+			fprintf (of, "\n:%04o\n", i);
+		}
+		last_addr = i;
+		cmd = M [i];
+		fprintf (of, "%o %02o %04o %04o %04o\n",
+			(int) (cmd >> 42) & 7,
+			(int) (cmd >> 36) & 077,
+			(int) (cmd >> 24) & 07777,
+			(int) (cmd >> 12) & 07777,
+			(int) cmd & 07777);
+	}
+	return SCPE_OK;
+}
+
+/*
+ * Loader/dumper
+ */
+t_stat sim_load (FILE *fi, char *cptr, char *fnam, int dump_flag)
+{
+	if (dump_flag)
+		return m20_dump (fi, fnam);
+
+	return m20_load (fi);
+}
+
+const char *m20_opname [64] = {
+	"зп",	"сл",	"вч",	"вчм",	"дел",	"умн",	"слпа",	"слц",
+	"вп",	"цме",	"цм",	"слк",	"сдма",	"нтж",	"пв",	"17",
+	"счп",	"слбо",	"вчбо",	"вчмбо","делбо","умнбо","слп",	"вчц",
+	"впбк",	"цбре",	"цбр",	"вчк",	"сдм",	"нтжс",	"пе",	"37",
+	"40",	"слбн",	"вчбн",	"вчмбн","кор",	"умнбн","вчпа",	"счмр",
+	"ма",	"цмо",	"раа",	"слко",	"сда",	"и",	"пб",	"57",
+	"60",	"слбно","вчбно","вчмбно","корбо","умнбно","вчп","сдц",
+	"мб",	"цбро",	"ра",	"вчко",	"сд",	"или",	"по",	"стоп",
+};
+
+int m20_instr_to_opcode (char *instr)
+{
+	int i;
+
+	for (i=0; i<64; ++i)
+		if (strcmp (m20_opname[i], instr) == 0)
+			return i;
+	return -1;
+}
+
+/*
+ * Печать 12-битной адресной части машинной инструкции.
+ */
+void m20_fprint_addr (FILE *of, int a, int flag)
+{
+	char buf [40], *p;
+
+	p = buf;
+	if (flag)
+		*p++ = '@';
+	if (flag && a >= 07700) {
+		*p++ = '-';
+		a = (a ^ 07777) + 1;
+		if (a > 7)
+			sprintf (p, "%#o", a);
+		else
+			sprintf (p, "%o", a);
+	} else if (a) {
+		if (flag)
+			*p++ = '+';
+		if (a > 7)
+			sprintf (p, "%#o", a);
+		else
+			sprintf (p, "%o", a);
+	} else
+		*p = 0;
+	printf ("%7s", buf);
+}
+
+/*
+ * Печать машинной инструкции.
+ */
+void m20_fprint_cmd (FILE *of, t_value cmd)
+{
+	const char *m;
+	int flags, op, a1, a2, a3;
+
+	flags = cmd >> 42 & 7;
+	op = cmd >> 36 & 077;
+	a1 = cmd >> 24 & 07777;
+	a2 = cmd >> 12 & 07777;
+	a3 = cmd & 07777;
+	m = m20_opname [op];
+
+	if (! flags && ! a1 && ! a2 && ! a3) {
+		/* Команда без аргументов. */
+		printf ("%s", m);
+		return;
+	}
+	printf ("%s ", m);
+	m20_fprint_addr (of, a1, flags & 4);
+	if (! (flags & 3) && ! a2 && ! a3) {
+		/* Нет аргументов 2 и 3. */
+		return;
+	}
+
+	printf (", ");
+	m20_fprint_addr (of, a2, flags & 2);
+	if (! (flags & 1) && ! a3) {
+		/* Нет аргумента 3. */
+		return;
+	}
+
+	printf (", ");
+	m20_fprint_addr (of, a3, flags & 1);
 }
 
 /*
@@ -261,44 +292,93 @@ t_stat fprint_sym (FILE *of, t_addr addr, t_value *val,
 	UNIT *uptr, int32 sw)
 {
 	int32 i, c;
-	uint32 inst, op, ea;
-
-	inst = val[0];
-	if (sw & SWMASK ('A')) {			/* alphabetic? */
-		if ((uptr == NULL) || !(uptr->flags & UNIT_ATT))
-			return SCPE_ARG;
-		if (uptr->flags & UNIT_FLEX) {		/* Flex file? */
-			c = flex_to_ascii[inst];	/* get ASCII equiv */
-			if (c <= 0)
-				return SCPE_ARG;
-		} else
-			c = inst & 0x7F;		/* ASCII file */
-		fputc (c, of);
-		return SCPE_OK;
-	}
+	uint32 op, ea;
+	t_value cmd;
 
 	if (uptr && (uptr != &cpu_unit))		/* must be CPU */
 		return SCPE_ARG;
-	if ((sw & SWMASK ('M')) &&			/* symbolic decode? */
-	    ((inst & ~(SIGN|I_OP|I_EA)) == 0)) {
-		op = I_GETOP (inst);
-		ea = I_GETEA (inst);
-		if (inst & SIGN)
-			fputc ('-', of);
-		fprintf (of, "%c ", opcode[op]);
-		m20_fprint_addr (of, sim_devices[0], ea);
-		return SCPE_OK;
-	}
 
-	if ((sw & SWMASK ('L')) ||			/* M20 hex? */
-	    ((cpu_unit.flags & UNIT_LGPH_D) && !(sw & SWMASK ('H')))) {
-		for (i = 0; i < 8; i++) {
-			c = (inst >> (4 * (7 - i))) & 0xF;
-			fputc (hex_decode[c], of);
-		}
+	cmd = val[0];
+	if (sw & SWMASK ('M')) {			/* symbolic decode? */
+		m20_fprint_cmd (of, cmd);
 		return SCPE_OK;
 	}
-	return SCPE_ARG;
+	fprintf (of, "%o %02o %04o %04o %04o",
+		(int) (cmd >> 42) & 7,
+		(int) (cmd >> 36) & 077,
+		(int) (cmd >> 24) & 07777,
+		(int) (cmd >> 12) & 07777,
+		(int) cmd & 07777);
+	return SCPE_OK;
+}
+
+char *m20_parse_offset (char *cptr, int *offset)
+{
+	char *tptr, gbuf[CBUFSIZE];
+
+	cptr = get_glyph (cptr, gbuf, 0);	/* get address */
+	*offset = strtotv (gbuf, &tptr, 8);
+	if ((tptr == gbuf) || (*tptr != 0) || (*offset > 07777))
+		return 0;
+	return cptr;
+}
+
+char *m20_parse_address (char *cptr, int *address, int *relative)
+{
+	cptr = skip_spaces (cptr);			/* absorb spaces */
+	if (*cptr >= '0' && *cptr <= '7')
+		return m20_parse_offset (cptr, address); /* get address */
+
+	if (*cptr != '@')
+		return 0;
+	*relative |= 1;
+	cptr = skip_spaces (cptr+1);			/* next char */
+	if (*cptr == '+') {
+		cptr = skip_spaces (cptr+1);		/* next char */
+		cptr = m20_parse_offset (cptr, address);
+		if (! cptr)
+			return 0;
+	} else if (*cptr == '-') {
+		cptr = skip_spaces (cptr+1);		/* next char */
+		cptr = m20_parse_offset (cptr, address);
+		if (! cptr)
+			return 0;
+		*address = (- *address) & 07777;
+	} else
+		return 0;
+	return cptr;
+}
+
+/*
+ * Instruction parse
+ */
+t_stat parse_instruction (char *cptr, t_value *val, int32 sw)
+{
+	int opcode, ra, a1, a2, a3;
+	char gbuf[CBUFSIZE];
+
+	cptr = get_glyph (cptr, gbuf, 0);		/* get opcode */
+	opcode = m20_instr_to_opcode (gbuf);
+	if (opcode < 0)
+		return SCPE_ARG;
+	ra = 0;
+	cptr = m20_parse_address (cptr, &a1, &ra);	/* get address 1 */
+	if (! cptr)
+		return SCPE_ARG;
+	ra <<= 1;
+	cptr = m20_parse_address (cptr, &a2, &ra);	/* get address 1 */
+	if (! cptr)
+		return SCPE_ARG;
+	ra <<= 1;
+	cptr = m20_parse_address (cptr, &a3, &ra);	/* get address 1 */
+	if (! cptr)
+		return SCPE_ARG;
+
+	val[0] = (t_value) opcode << 36 | (t_value) ra << 42 |
+		(t_value) a1 << 24 | a2 << 12 | a3;
+	if (*cptr != 0)
+		return SCPE_2MARG;
+	return SCPE_OK;
 }
 
 /*
@@ -316,75 +396,23 @@ t_stat fprint_sym (FILE *of, t_addr addr, t_value *val,
 t_stat parse_sym (char *cptr, t_addr addr, UNIT *uptr, t_value *val, int32 sw)
 {
 	int32 i, c;
-	char *tptr;
 
-	while (isspace (*cptr))                                 /* absorb spaces */
-		cptr++;
-	if ((sw & SWMASK ('A')) || ((*cptr == '\'') && cptr++)) {
-		if ((uptr == NULL) || !(uptr->flags & UNIT_ATT))
-			return SCPE_ARG;
-		if (uptr->flags & UNIT_FLEX) {                      /* Flex file? */
-			c = ascii_to_flex[*cptr & 0x7F];                /* get Flex equiv */
-			if (c < 0)
-				return SCPE_ARG;
-			val[0] = ((c >> 1) | (c << 5)) & 0x3F;          /* transpose */
-		} else
-			val[0] = *cptr & 0x7F;                         /* ASCII file */
-		return SCPE_OK;
-	}
-
-	if (uptr && (uptr != &cpu_unit))                        /* must be CPU */
+	if (uptr && (uptr != &cpu_unit))		/* must be CPU */
 		return SCPE_ARG;
-	if (!parse_sym_m (cptr, val, sw))                       /* symbolic parse? */
+	cptr = skip_spaces (cptr);			/* absorb spaces */
+	if (! parse_instruction (cptr, val, sw))	/* symbolic parse? */
 		return SCPE_OK;
-	if ((sw & SWMASK ('L')) ||                              /* M20 hex? */
-	    ((cpu_unit.flags & UNIT_LGPH_D) && !(sw & SWMASK ('H')))) {
-		val[0] = 0;
-		while (isspace (*cptr)) cptr++;                     /* absorb spaces */
-		for (i = 0; i < 8; i++) {
-			c = *cptr++;                                    /* get char */
-			if (c == 0)
-				return SCPE_OK;
-			if (islower (c))
-				c = toupper (c);
-			if (tptr = strchr (hex_decode, c))
-				val[0] = (val[0] << 4) | (tptr - hex_decode);
-			else
-				return SCPE_ARG;
-		}
+
+	val[0] = 0;
+	for (i=0; i<14; i++) {
 		if (*cptr == 0)
 			return SCPE_OK;
+		if (*cptr < '0' || *cptr > '7')
+			return SCPE_ARG;
+		val[0] = (val[0] << 3) | (*cptr - '0');
+		cptr = skip_spaces (cptr+1);		/* next char */
 	}
-	return SCPE_ARG;
-}
-
-/*
- * Instruction parse
- */
-t_stat parse_sym_m (char *cptr, t_value *val, int32 sw)
-{
-	uint32 ea, sgn;
-	char *tptr, gbuf[CBUFSIZE];
-
-	if (*cptr == '-') {
-		cptr++;
-		sgn = SIGN;
-	} else
-		sgn = 0;
-	cptr = get_glyph (cptr, gbuf, 0);		/* get opcode */
-	if (gbuf[1] != 0)
-		return SCPE_ARG;
-	if (tptr = strchr (opcode, gbuf[0]))
-		val[0] = ((tptr - opcode) << I_V_OP) | sgn; /* merge opcode */
-	else
-		return SCPE_ARG;
-	cptr = get_glyph (cptr, gbuf, 0);		/* get address */
-	ea = m20_parse_addr (sim_devices[0], gbuf, &tptr);
-	if ((tptr == gbuf) || (*tptr != 0) || (ea > AMASK))
-		return SCPE_ARG;
-	val[0] = val[0] | (ea << I_V_EA);		/* merge address */
 	if (*cptr != 0)
-		return SCPE_2MARG;
+		return SCPE_ARG;
 	return SCPE_OK;
 }
-#endif

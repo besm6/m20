@@ -256,7 +256,7 @@ SDS_OPT = -I ${SDSD}
 #M20D = M20
 M20D = .
 M20 = ${M20D}/m20_cpu.c ${M20D}/m20_stddev.c ${M20D}/m20_sys.c
-M20_OPT = -I ${M20D}
+M20_OPT = -I ${M20D} -DUSE_INT64
 
 #
 # Build everything
@@ -264,7 +264,7 @@ M20_OPT = -I ${M20D}
 ALL = pdp1 pdp4 pdp7 pdp8 pdp9 pdp15 pdp11 pdp10 \
 	vax vax780 nova eclipse hp2100 i1401 i1620 s3 \
 	altair altairz80 gri i1620 i7094 ibm1130 id16 \
-	id32 sds lgp h316
+	id32 sds lgp h316 m20
 
 # Build only M20 in current directory
 ALL = m20
@@ -274,8 +274,8 @@ all : ${ALL}
 
 clean :
 ifeq ($(WIN32),)
-	cd ${BIN} && ${RM} ${ALL}
-	${RM} *~ m20.dSYM
+	cd ${BIN} && ${RM} ${ALL} *.dSYM
+	${RM} *~
 else
 	if exist BIN\*.exe del /q BIN\*.exe
 endif
