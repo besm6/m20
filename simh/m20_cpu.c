@@ -2,746 +2,1213 @@
  *
  * Copyright (c) 2009, Serge Vakulenko
  */
-
-#if 1
-/*
-   cpu          LGP-30 [LGP-21] CPU
-
-   The system state for the LGP-30 [LGP-21] is:
-
-   A<0:31>              accumulator
-   C<0:11>              counter (PC)
-   OVF                  overflow flag [LGP-21 only]
-
-   The LGP-30 [LGP-21] has just one instruction format:
-
-                        1 1 1 1 1 1 1 1 1 1 2 2 2 2 2 2 2 2 2 2 3 3
-    0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
-   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-   |S|                     |opcode |   |    operand address    |   |
-   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-
-    LGP-30 instructions:
-
-    <0,12:15>           operation
-
-    0                   stop
-    1                   A <- M[ea]
-    2                   M[ea]<addr> <- A<addr>
-    3                   M[ea]<addr> <- C + 1
-    4                   input
-    5                   A <- A / M[ea]
-    6                   A <- A * M[ea], low result
-    7                   A <- A * M[ea], high result
-    8                   output
-    9                   A <- A & M[ea]
-    A                   C <- ea
-    B                   C <- ea if A < 0
-    -B                  C <- ea if (A < 0) || T-switch set
-    C                   M[ea] <- A
-    D                   M[ea] <- A, A <- 0
-    E                   A <- A + M[ea]
-    F                   A <- A - M[ea]
-
-    LGP-21 instructions:
-
-    <0,12:15>           operation
-
-    0                   stop; sense and skip
-    -0                  stop; sense overflow and skip
-    1                   A <- M[ea]
-    2                   M[ea]<addr> <- A<addr>
-    3                   M[ea]<addr> <- C + 1
-    4                   6b input
-    -4                  4b input
-    5                   A <- A / M[ea]
-    6                   A <- A * M[ea], low result
-    7                   A <- A * M[ea], high result
-    8                   6b output
-    -8                  4b output
-    9                   A <- A & M[ea]
-    A                   C <- ea
-    B                   C <- ea if A < 0
-    -B                  C <- ea if (A < 0) || T-switch set
-    C                   M[ea] <- A
-    D                   M[ea] <- A, A <- 0
-    E                   A <- A + M[ea]
-    F                   A <- A - M[ea]
-
-    The LGP-30 [LGP-21] has 4096 32b words of memory.  The low order
-    bit is always read and stored as 0.  The LGP-30 uses a drum for
-    memory, with 64 tracks of 64 words.  The LGP-21 uses a disk for
-    memory, with 32 tracks of 128 words.
-
-   This routine is the instruction decode routine for the LGP-30
-   [LGP-21].  It is called from the simulator control program to
-   execute instructions in simulated memory, starting at the simulated
-   PC.  It runs until 'reason' is set non-zero.
-
-   General notes:
-
-   1. Reasons to stop.  The simulator can be stopped by:
-
-        STOP instruction
-        breakpoint encountered
-        overflow [LGP-30]
-        I/O error in I/O simulator
-
-   2. Interrupts.  There are no interrupts.
-
-   3. Non-existent memory.  All of memory always exists.
-
-   4. Adding I/O devices.  The LGP-30 could not support additional
-      I/O devices.  The LGP-21 could but none are known.
-*/
-
 #include "m20_defs.h"
+#include <math.h>
+#include <unistd.h>
+#include <fcntl.h>
+#include <sys/stat.h>
 
-#define PCQ_SIZE        64                              /* must be 2**n */
-#define PCQ_MASK        (PCQ_SIZE - 1)
-#define PCQ_ENTRY       pcq[pcq_p = (pcq_p - 1) & PCQ_MASK] = (PC - 1) & AMASK;
-#define M16             0xFFFF
-#define M32             0xFFFFFFFF
-#define NEG(x)          ((~(x) + 1) & DMASK)
-#define ABS(x)          (((x) & SIGN)? NEG (x): (x))
+t_value M [MEMSIZE];
+uint32 RVK, RA, OMEGA;
+t_value RK, RR, RMR, RPU1, RPU2, RPU3, RPU4;
+double delay;
 
-uint32 M[MEMSIZE] = { 0 };                              /* memory */
-uint32 PC = 0;                                          /* counter */
-uint32 A = 0;                                           /* accumulator */
-uint32 IR = 0;                                          /* instr register */
-uint32 OVF = 0;                                         /* overflow indicator */
-uint32 t_switch = 0;                                    /* transfer switch */
-uint32 bp32 = 0;                                        /* BP32 switch */
-uint32 bp16 = 0;                                        /* BP16 switch */
-uint32 bp8 = 0;                                         /* BP8 switch */
-uint32 bp4 = 0;                                         /* BP4 switch */
-uint32 inp_strt = 0;                                    /* input started */
-uint32 inp_done = 0;                                    /* input done */
-uint32 out_strt = 0;                                    /* output started */
-uint32 out_done = 0;                                    /* output done */
-uint32 lgp21_sov = 0;                                   /* LGP-21 sense pending */
-int32 delay = 0;
-int16 pcq[PCQ_SIZE] = { 0 };                            /* PC queue */
-int32 pcq_p = 0;                                        /* PC queue ptr */
-REG *pcq_r = NULL;                                      /* PC queue reg ptr */
-
-extern int32 sim_interval;
-extern int32 sim_int_char;
 extern uint32 sim_brk_types, sim_brk_dflt, sim_brk_summ; /* breakpoint info */
-extern int32 sim_step;
+extern int32 sim_interval, sim_step;
 
-t_stat cpu_ex (t_value *vptr, t_addr addr, UNIT *uptr, int32 sw);
-t_stat cpu_dep (t_value val, t_addr addr, UNIT *uptr, int32 sw);
+t_stat cpu_examine (t_value *vptr, t_addr addr, UNIT *uptr, int32 sw);
+t_stat cpu_deposit (t_value val, t_addr addr, UNIT *uptr, int32 sw);
 t_stat cpu_reset (DEVICE *dptr);
-t_stat cpu_set_model (UNIT *uptr, int32 val, char *cptr, void *desc);
-t_stat cpu_show_model (FILE *st, UNIT *uptr, int32 val, void *desc);
-t_stat cpu_set_30opt (UNIT *uptr, int32 val, char *cptr, void *desc);
-t_stat cpu_set_30opt_i (UNIT *uptr, int32 val, char *cptr, void *desc);
-t_stat cpu_set_30opt_o (UNIT *uptr, int32 val, char *cptr, void *desc);
-t_stat cpu_set_fill (UNIT *uptr, int32 val, char *cptr, void *desc);
-t_stat cpu_set_exec (UNIT *uptr, int32 val, char *cptr, void *desc);
-t_stat cpu_one_inst (uint32 opc, uint32 ir);
-uint32 Mul64 (uint32 a, uint32 b, uint32 *low);
-t_bool Div32 (uint32 dvd, uint32 dvr, uint32 *q);
-uint32 I_delay (uint32 opc, uint32 ea, uint32 op);
-uint32 shift_in (uint32 a, uint32 dat, uint32 sh4);
 
-extern t_stat op_p (uint32 dev, uint32 ch);
-extern t_stat op_i (uint32 dev, uint32 ch, uint32 sh4);
-extern void m20_vm_init (void);
+/*
+ * CPU data structures
+ *
+ * cpu_dev      CPU device descriptor
+ * cpu_unit     CPU unit descriptor
+ * cpu_reg      CPU register list
+ * cpu_mod      CPU modifiers list
+ */
 
-/* CPU data structures
-
-   cpu_dev      CPU device descriptor
-   cpu_unit     CPU unit descriptor
-   cpu_reg      CPU register list
-   cpu_mod      CPU modifiers list
-*/
-
-UNIT cpu_unit = { UDATA (NULL, UNIT_FIX+UNIT_IN4B+UNIT_TTSS_D, MEMSIZE) };
+UNIT cpu_unit = { UDATA (NULL, UNIT_FIX, MEMSIZE) };
 
 REG cpu_reg[] = {
-    { DRDATA (C, PC, 12), REG_VMAD },
-    { HRDATA (A, A, 32), REG_VMIO },
-    { HRDATA (IR, IR, 32), REG_VMIO },
-    { FLDATA (OVF, OVF, 0) },
-    { FLDATA (TSW, t_switch, 0) },
-    { FLDATA (BP32, bp32, 0) },
-    { FLDATA (BP16, bp16, 0) },
-    { FLDATA (BP8, bp8, 0) },
-    { FLDATA (BP4, bp4, 0) },
-    { FLDATA (INPST, inp_strt, 0) },
-    { FLDATA (INPDN, inp_done, 0) },
-    { FLDATA (OUTST, out_strt, 0) },
-    { FLDATA (OUTDN, out_done, 0) },
-    { DRDATA (DELAY, delay, 7) },
-    { BRDATA (CQ, pcq, 16, 12, PCQ_SIZE), REG_RO + REG_CIRC },
-    { HRDATA (CQP, pcq_p, 6), REG_HRO },
-    { HRDATA (WRU, sim_int_char, 8) },
-    { NULL }
-    };
+	{ "РВК",  &RVK,   8, 12, 0, 1 },	/* регистр выборки команды */
+	{ "РА",   &RA,    8, 12, 0, 1 },	/* регистр адреса */
+	{ "Ω",	  &OMEGA, 8, 1,  0, 1 },	/* Ω */
+	{ "РК",   &RK,    8, 45, 0, 1 },	/* регистр команды */
+	{ "РР",   &RR,    8, 45, 0, 1 },	/* регистр результата */
+	{ "РМР",  &RMR,   8, 45, 0, 1 },	/* регистр младших разрядов (М-220) */
+	{ "РПУ1", &RPU1,  8, 45, 0, 1 },	/* регистр 1 пульта управления */
+	{ "РПУ2", &RPU2,  8, 45, 0, 1 },	/* регистр 2 пульта управления */
+	{ "РПУ3", &RPU3,  8, 45, 0, 1 },	/* регистр 3 пульта управления */
+	{ "РПУ4", &RPU4,  8, 45, 0, 1 },	/* регистр 4 пульта управления */
+};
 
 MTAB cpu_mod[] = {
-    { UNIT_LGP21, UNIT_LGP21, "LGP-21", "LGP21", &cpu_set_model, &cpu_show_model },
-    { UNIT_LGP21, 0,          "LGP-30", "LGP30", &cpu_set_model, &cpu_show_model },
-    { UNIT_TTSS_D, UNIT_TTSS_D, 0, "TRACK" },
-    { UNIT_TTSS_D, 0,           0, "NORMAL" },
-    { UNIT_LGPH_D, UNIT_LGPH_D, 0, "LGPHEX" },
-    { UNIT_LGPH_D, 0,           0, "STANDARDHEX" },
-    { UNIT_MANI, UNIT_MANI, NULL, "MANUAL" },
-    { UNIT_MANI, 0,         NULL, "TAPE" },
-    { UNIT_IN4B, UNIT_IN4B, NULL, "4B", &cpu_set_30opt },
-    { UNIT_IN4B, 0,         NULL, "6B", &cpu_set_30opt },
-    { MTAB_XTD|MTAB_VDV, 0, NULL, "INPUT", &cpu_set_30opt_i },
-    { MTAB_XTD|MTAB_VDV, 0, NULL, "OUTPUT", &cpu_set_30opt_o },
-    { MTAB_XTD|MTAB_VDV, 0, NULL, "EXECUTE", &cpu_set_exec },
-    { MTAB_XTD|MTAB_VDV, 0, NULL, "FILL", &cpu_set_fill },
-    { 0 }
-    };
+	{ 0 }
+};
 
 DEVICE cpu_dev = {
-    "CPU", &cpu_unit, cpu_reg, cpu_mod,
-    1, 10, 12, 1, 16, 32,
-    &cpu_ex, &cpu_dep, &cpu_reset,
-    NULL, NULL, NULL
-    };
+	"CPU", &cpu_unit, cpu_reg, cpu_mod,
+	1, 8, 12, 1, 8, 45,
+	&cpu_examine, &cpu_deposit, &cpu_reset,
+	NULL, NULL, NULL
+};
 
-/* Timing tables */
+/*
+ * SCP data structures and interface routines
+ *
+ * sim_name		simulator name string
+ * sim_PC		pointer to saved PC register descriptor
+ * sim_emax		maximum number of words for examine/deposit
+ * sim_devices		array of pointers to simulated devices
+ * sim_stop_messages	array of pointers to stop messages
+ * sim_load		binary loader
+ */
 
-/* Optimization minima and maxima
-     Z   B   Y   R   I   D   N   M   P   E   U   T   H   C   A   S */
+char sim_name[] = "M-20";
 
-static const int32 min_30[16] = {
-     2,  2,  2,  2,  2,  2,  2,  2,  2,  2,  2,  2,  2,  2,  2,  2
-     };
-static const int32 max_30[16] = {
-     7,  7,  7,  7,  7,  5,  8,  6,  7,  7,  0,  0,  7,  7,  7,  7
-     };
-static const int32 min_21[16] = {
-     2,  2,  2,  2,  2,  2,  2,  2,  2,  2,  2,  2,  2,  2,  2,  2
-     };
-static const int32 max_21[16] = {
-     0, 16, 16, 16,  0, 58, 81, 79,  0, 16,  0,  0, 16, 16, 16, 16
-     };
+REG *sim_PC = &cpu_reg[0];
 
-static const uint32 log_to_phys_30[NSC_30] = {          /* drum interlace chart */
-    0, 57, 50, 43, 36, 29, 22, 15, 8 ,
-    1, 58, 51, 44, 37, 30, 23, 16, 9 ,
-    2, 59, 52, 45, 38, 31, 24, 17, 10,
-    3, 60, 53, 46, 39, 32, 25, 18, 11,
-    4, 61, 54, 47, 40, 33, 26, 19, 12,
-    5, 62, 55, 48, 41, 32, 27, 20, 13,
-    6, 63, 56, 49, 42, 33, 28, 21, 14,
-    7
-    };
+int32 sim_emax = 1;
 
-static const uint32 log_to_phys_21[NSC_21] = {          /* disk interlace chart */
-    0, 64, 57, 121, 50, 114, 43, 107, 36, 100, 29, 93, 22, 86, 15, 79,  8, 72,
-    1, 65, 58, 122, 51, 115, 44, 108, 37, 101, 30, 94, 23, 87, 16, 80,  9, 73,
-    2, 66, 59, 123, 52, 116, 45, 109, 38, 102, 31, 95, 24, 88, 17, 81, 10, 74,
-    3, 67, 60, 124, 53, 117, 46, 110, 39, 103, 32, 96, 25, 89, 18, 82, 11, 75,
-    4, 68, 61, 125, 54, 118, 47, 111, 40, 104, 33, 97, 26, 90, 19, 83, 12, 76,
-    5, 69, 62, 126, 55, 119, 48, 112, 41, 105, 34, 98, 27, 91, 20, 84, 12, 77,
-    6, 70, 63, 127, 56, 120, 49, 113, 42, 106, 35, 99, 28, 92, 21, 85, 13, 78,
-    7, 71
-    };
+DEVICE *sim_devices[] = {
+	&cpu_dev,
+	NULL
+};
 
-t_stat sim_instr (void)
+const char *sim_stop_messages[] = {
+	"Неизвестная ошибка",				/* Unknown error */
+	"Останов",					/* STOP */
+	"Точка останова",				/* Breakpoint */
+	"Выход за пределы памяти",			/* Run out end of memory */
+	"Неверный код команды",				/* Invalid instruction */
+	"Переполнение при сложении",			/* Addition overflow */
+	"Переполнение при сложении порядков",		/* Exponent overflow */
+	"Переполнение при умножении",			/* Multiplication overflow */
+};
+
+/* Параметры обмена с внешним устройством. */
+int ext_op;			/* УЧ - условное число */
+int ext_disk_addr;		/* А_МЗУ - начальный адрес на барабане/ленте */
+int ext_ram_start;		/* α_МОЗУ - начальный адрес памяти */
+int ext_ram_finish;		/* ω_МОЗУ - конечный адрес памяти */
+int drum;			/* файл с образом барабана */
+
+/*
+ * Memory examine
+ */
+t_stat cpu_examine (t_value *vptr, t_addr addr, UNIT *uptr, int32 sw)
 {
-t_stat r = 0;
-uint32 oPC;
-
-/* Restore register state */
-
-PC = PC & AMASK;                                        /* mask PC */
-sim_cancel_step ();                                     /* defang SCP step */
-if (lgp21_sov) {                                        /* stop sense pending? */
-    lgp21_sov = 0;
-    if (!OVF)                                           /* ovf off? skip */
-        PC = (PC + 1) & AMASK;
-    else OVF = 0;                                       /* on? reset */
-    }
-
-/* Main instruction fetch/decode loop */
-
-do {
-    if (sim_interval <= 0) {                            /* check clock queue */
-        if (r = sim_process_event ())
-            break;
-        }
-
-    if (delay > 0) {                                    /* delay to next instr */
-        delay = delay - 1;                              /* count down delay */
-        sim_interval = sim_interval - 1;
-        continue;                                       /* skip execution */
-        }
-
-    if (sim_brk_summ &&                                 /* breakpoint? */
-        sim_brk_test (PC, SWMASK ('E'))) {
-        r = STOP_IBKPT;                                 /* stop simulation */
-        break;
-        }
-
-    IR = Read (oPC = PC);                               /* get instruction */
-    PC = (PC + 1) & AMASK;                              /* increment PC */
-    sim_interval = sim_interval - 1;
-
-    if (r = cpu_one_inst (oPC, IR)) {                   /* one instr; error? */
-        if (r == STOP_STALL) {                          /* stall? */
-            PC = oPC;                                   /* back up PC */
-            delay = r = 0;                              /* no delay */
-            }
-        else break;
-        }
-
-    if (sim_step && (--sim_step <= 0))                  /* do step count */
-        r = SCPE_STOP;
-
-    } while (r == 0);                                   /* loop until halted */
-pcq_r->qptr = pcq_p;                                    /* update pc q ptr */
-return r;
+	if (addr >= MEMSIZE)
+		return SCPE_NXM;
+	if (vptr != NULL)
+		*vptr = M [addr];
+	return SCPE_OK;
 }
 
-/* Execute one instruction */
-
-t_stat cpu_one_inst (uint32 opc, uint32 ir)
+/*
+ * Memory deposit
+ */
+t_stat cpu_deposit (t_value val, t_addr addr, UNIT *uptr, int32 sw)
 {
-uint32 ea, op, dat, res, dev, sh4, ch;
-t_bool ovf_this_cycle = FALSE;
-t_stat reason = 0;
-
-op = I_GETOP (ir);                                      /* opcode */
-ea = I_GETEA (ir);                                      /* address */
-switch (op) {                                           /* case on opcode */
-
-/* Loads, stores, transfers instructions */
-
-    case OP_B:                                          /* bring */
-        A = Read (ea);                                  /* A <- M[ea] */
-        delay = I_delay (opc, ea, op);
-        break;
-
-    case OP_H:                                          /* hold */
-        Write (ea, A);                                  /* M[ea] <- A */
-        delay = I_delay (opc, ea, op);
-        break;
-
-    case OP_C:                                          /* clear */
-        Write (ea, A);                                  /* M[ea] <- A */
-        A = 0;                                          /* A <- 0 */
-        delay = I_delay (opc, ea, op);
-        break;
-
-    case OP_Y:                                          /* store address */
-        dat = Read (ea);                                /* get operand */
-        dat = (dat & ~I_EA) | (A & I_EA);               /* merge address */
-        Write (ea, dat);
-        delay = I_delay (opc, ea, op);
-        break;
-
-    case OP_R:                                          /* return address */
-        dat = Read (ea);                                /* get operand */
-        dat = (dat & ~I_EA) | (((PC + 1) & AMASK) << I_V_EA);
-        Write (ea, dat);
-        delay = I_delay (opc, ea, op);
-        break;
-
-    case OP_U:                                          /* uncond transfer */
-        PCQ_ENTRY;
-        PC = ea;                                        /* transfer */
-        delay = I_delay (opc, ea, op);
-        break;
-
-    case OP_T:                                          /* conditional transfer */
-        if ((A & SIGN) ||                               /* A < 0 or */
-            ((ir & SIGN) && t_switch)) {                /* -T and Tswitch set? */
-            PCQ_ENTRY;
-            PC = ea;                                    /* transfer */
-            }
-        delay = I_delay (opc, ea, op);
-        break;
-
-/* Arithmetic and logical instructions */
-
-    case OP_A:                                          /* add */
-        dat = Read (ea);                                /* get operand */
-        res = (A + dat) & DMASK;                        /* add */
-        if ((~A ^ dat) & (dat ^ res) & SIGN)            /* calc overflow */
-            ovf_this_cycle = TRUE;
-        A = res;                                        /* save result */
-        delay = I_delay (opc, ea, op);
-        break;
-
-    case OP_S:                                          /* sub */
-        dat = Read (ea);                                /* get operand */
-        res = (A - dat) & DMASK;                        /* subtract */
-        if ((A ^ dat) & (~dat ^ res) & SIGN)            /* calc overflow */
-            ovf_this_cycle = TRUE;
-        A = res;
-        delay = I_delay (opc, ea, op);
-        break;
-
-    case OP_M:                                          /* multiply high */
-        dat = Read (ea);                                /* get operand */
-        A = (Mul64 (A, dat, NULL) << 1) & DMASK;        /* multiply */
-        delay = I_delay (opc, ea, op);
-        break;
-
-    case OP_N:                                          /* multiply low */
-        dat = Read (ea);                                /* get operand */
-        Mul64 (A, dat, &res);                           /* multiply */
-        A = res;                                        /* keep low result */
-        delay = I_delay (opc, ea, op);                  /* total delay */
-        break;
-
-    case OP_D:                                          /* divide */
-        dat = Read (ea);                                /* get operand */
-        if (Div32 (A, dat, &A))                         /* divide; overflow? */
-            ovf_this_cycle = TRUE;
-        delay = I_delay (opc, ea, op);
-        break;
-
-    case OP_E:                                          /* extract */
-        dat = Read (ea);                                /* get operand */
-        A = A & dat;                                    /* and */
-        delay = I_delay (opc, ea, op);
-        break;
-
-/* IO instructions */
-
-    case OP_P:                                          /* output */
-        if (Q_LGP21) {                                  /* LGP-21 */
-            ch = A >> 26;                               /* char, 6b */
-            if (ir & SIGN)                              /* 4b? convert */
-                ch = (ch & 0x3C) | 2;
-            dev = I_GETTK (ir);                         /* device select */
-            }
-        else {                                          /* LGP-30 */
-            ch = I_GETTK (ir);                          /* char, always 6b */
-            dev = Q_OUTPT? DEV_PT: DEV_TT;              /* device select */
-            }
-        reason = op_p (dev & DEV_MASK, ch);             /* output */
-        delay = I_delay (sim_grtime (), ea, op);        /* next instruction */
-        break;
-
-    case OP_I:                                          /* input */
-        if (Q_LGP21) {                                  /* LGP-21 */
-            ch = 0;                                     /* initial shift */
-            sh4 = ir & SIGN;                            /* 4b/6b select */
-            dev = I_GETTK (ir);                         /* device select */
-            }
-        else {                                          /* LGP-30 */
-            ch = I_GETTK (ir);                          /* initial shift */
-            sh4 = Q_IN4B;                               /* 4b/6b select */
-            dev = Q_INPT? DEV_PT: DEV_TT;               /* device select */
-            }
-        if (dev == DEV_SHIFT)                           /* shift? */
-            A = shift_in (A, 0, sh4);                   /* shift 4/6b */
-        else reason = op_i (dev & DEV_MASK, ch, sh4);   /* input */
-        delay = I_delay (sim_grtime (), ea, op);        /* next instruction */
-        break;
-
-    case OP_Z:
-        if (Q_LGP21) {                                  /* LGP-21 */
-            if (ea & 0xF80) {                           /* no stop? */
-                if (((ea & 0x800) && !bp32) ||          /* skip if any */
-                    ((ea & 0x400) && !bp16) ||          /* selected switch */
-                    ((ea & 0x200) && !bp8) ||           /* is off */
-                    ((ea & 0x100) && !bp4) ||           /* or if */
-                    ((ir & SIGN) && !OVF))              /* ovf sel and off */
-                    PC = (PC + 1) & AMASK;
-                if (ir & SIGN)                          /* -Z? clr overflow */
-                    OVF = 0;
-                }
-            else {                                      /* stop */
-                lgp21_sov = (ir & SIGN)? 1: 0;          /* pending sense? */
-                reason = STOP_STOP;                     /* stop */
-                }
-            }
-        else {                                          /* LGP-30 */
-            if (out_done)                               /* P complete? */
-                out_done = 0;
-            else if (((ea & 0x800) && bp32) ||          /* bpt switch set? */
-                ((ea & 0x400) && bp16) ||
-                ((ea & 0x200) && bp8) ||
-                ((ea & 0x100) && bp4)) ;                /* don't stop or stall */
-            else if (out_strt)                          /* P pending? stall */
-                reason = STOP_STALL;
-            else reason = STOP_STOP;                    /* no, stop */
-            }
-        delay = I_delay (sim_grtime (), ea, op);        /* next instruction */
-        break;                                          /* end switch */
-        }
-
-if (ovf_this_cycle) {
-    if (Q_LGP21)                                        /* LGP-21? set OVF */
-        OVF = 1;
-    else reason = STOP_OVF;                             /* LGP-30? stop */
-    }
-return reason;
+	if (addr >= MEMSIZE)
+		return SCPE_NXM;
+	M [addr] = val;
+	return SCPE_OK;
 }
 
-/* Support routines */
-
-uint32 Read (uint32 ea)
-{
-return M[ea] & MMASK;
-}
-
-void Write (uint32 ea, uint32 dat)
-{
-M[ea] = dat & MMASK;
-return;
-}
-
-/* Input shift */
-
-uint32 shift_in (uint32 a, uint32 dat, uint32 sh4)
-{
-if (sh4)
-    return (((a << 4) | (dat >> 2)) & DMASK);
-return (((a << 6) | dat) & DMASK);
-}
-
-/* 32b * 32b multiply, signed */
-
-uint32 Mul64 (uint32 a, uint32 b, uint32 *low)
-{
-uint32 sgn = a ^ b;
-uint32 ah, bh, al, bl, rhi, rlo, rmid1, rmid2;
-
-if ((a == 0) || (b == 0)) {                             /* zero argument? */
-    if (low)
-        *low = 0;
-    return 0;
-    }
-a = ABS (a);
-b = ABS (b);
-ah = (a >> 16) & M16;                                   /* split operands */
-bh = (b >> 16) & M16;                                   /* into 16b chunks */
-al = a & M16;
-bl = b & M16;
-rhi = ah * bh;                                          /* high result */
-rmid1 = ah * bl;
-rmid2 = al * bh;
-rlo = al * bl;
-rhi = rhi + ((rmid1 >> 16) & M16) + ((rmid2 >> 16) & M16);
-rmid1 = (rlo + (rmid1 << 16)) & M32;                    /* add mid1 to lo */
-if (rmid1 < rlo)                                        /* carry? incr hi */
-    rhi = rhi + 1;
-rmid2 = (rmid1 + (rmid2 << 16)) & M32;                  /* add mid2 to to */
-if (rmid2 < rmid1)                                      /* carry? incr hi */
-    rhi = rhi + 1;
-if (sgn & SIGN) {                                       /* result negative? */
-    rmid2 = NEG (rmid2);                                /* negate */
-    rhi = (~rhi + (rmid2 == 0)) & M32;
-    }
-if (low)                                                /* low result */
-    *low = rmid2;
-return rhi & M32;
-}
-
-/* 32b/32b divide (done as 32b'0/32b) */
-
-t_bool Div32 (uint32 dvd, uint32 dvr, uint32 *q)
-{
-uint32 sgn = dvd ^ dvr;
-uint32 i, quo;
-
-dvd = ABS (dvd);
-dvr = ABS (dvr);
-if (dvd >= dvr)
-    return TRUE;
-for (i = quo = 0; i < 31; i++) {                        /* 31 iterations */
-    quo = quo << 1;                                     /* shift quotient */
-    dvd = dvd << 1;                                     /* shift dividend */
-    if (dvd >= dvr) {                                   /* step work? */
-        dvd = (dvd - dvr) & M32;                        /* subtract dvr */
-        quo = quo + 1;
-        }
-    }
-quo = (quo + 1) & MMASK;                                /* round low bit */
-if (sgn & SIGN)                                         /* result -? */
-    quo = NEG (quo);
-if (q)                                                  /* return quo */
-    *q = quo;
-return FALSE;                                           /* no overflow */
-}
-
-/* Rotational delay */
-
-uint32 I_delay (uint32 opc, uint32 ea, uint32 op)
-{
-uint32 tmin = Q_LGP21? min_21[op]: min_30[op];
-uint32 tmax = Q_LGP21? max_21[op]: max_30[op];
-uint32 nsc, curp, newp, oprp, pcdelta, opdelta;
-
-if (Q_LGP21) {                                          /* LGP21 */
-    nsc = NSC_21;                                       /* full rotation delay */
-    curp = log_to_phys_21[opc & SCMASK_21];             /* current phys pos */
-    newp = log_to_phys_21[PC & SCMASK_21];              /* new PC phys pos */
-    oprp = log_to_phys_21[ea & SCMASK_21];              /* ea phys pos */
-    pcdelta = (newp - curp + NSC_21) & SCMASK_21;
-    opdelta = (oprp - curp + NSC_21) & SCMASK_21;
-    }
-else {
-    nsc = NSC_30;
-    curp = log_to_phys_30[opc & SCMASK_30];
-    newp = log_to_phys_30[PC & SCMASK_30];
-    oprp = log_to_phys_30[ea & SCMASK_30];
-    pcdelta = (newp - curp + NSC_30) & SCMASK_30;
-    opdelta = (oprp - curp + NSC_30) & SCMASK_30;
-    }
-if (tmax == 0) {                                        /* skip ea calc? */
-    if (pcdelta >= tmin)                                /* new PC >= min? */
-        return pcdelta - 1;
-    return pcdelta + nsc - 1;
-    }
-if ((opdelta >= tmin) && (opdelta <= tmax))
-    return pcdelta - 1;
-return pcdelta + nsc - 1;
-}
-
-/* Reset routine */
-
+/*
+ * Reset routine
+ */
 t_stat cpu_reset (DEVICE *dptr)
 {
-OVF = 0;
-inp_strt = 0;
-inp_done = 0;
-out_strt = 0;
-out_done = 0;
-lgp21_sov = 0;
-delay = 0;
-m20_vm_init ();
-pcq_r = find_reg ("CQ", NULL, dptr);
-if (pcq_r)
-    pcq_r->qptr = 0;
-else return SCPE_IERR;
-sim_brk_types = sim_brk_dflt = SWMASK ('E');
-return SCPE_OK;
+	RA = 0;
+	OMEGA = 0;
+	RMR = 0;
+	RR = 0;
+	sim_brk_types = sim_brk_dflt = SWMASK ('E');
+	return SCPE_OK;
 }
 
-/* Validate option, must be LGP30 */
-
-t_stat cpu_set_30opt (UNIT *uptr, int32 val, char *cptr, void *desc)
+/*
+ * Считывание слова из памяти.
+ */
+t_value load (int addr)
 {
-if (Q_LGP21)
-    return SCPE_ARG;
-return SCPE_OK;
+	t_value val;
+
+	addr &= 07777;
+	if (addr == 0)
+		return 0;
+
+	val = M [addr];
+	return val;
 }
 
-/* Validate input option, must be LGP30 */
-
-t_stat cpu_set_30opt_i (UNIT *uptr, int32 val, char *cptr, void *desc)
+/*
+ * Запись слова в памяти.
+ */
+void store (int addr, t_value val)
 {
-if (Q_LGP21 || (cptr == NULL))
-    return SCPE_ARG;
-if (strcmp (cptr, "TTI") == 0)
-    uptr->flags = uptr->flags & ~UNIT_INPT;
-else if (strcmp (cptr, "PTR") == 0)
-    uptr->flags = uptr->flags | UNIT_INPT;
-else return SCPE_ARG;
-return SCPE_OK;
+	addr &= 07777;
+	if (addr == 0)
+		return;
+
+	M [addr] = val;
 }
 
-/* Validate output option, must be LGP30 */
-
-t_stat cpu_set_30opt_o (UNIT *uptr, int32 val, char *cptr, void *desc)
+/*
+ * Проверка числа на равенство нулю.
+ */
+static inline int is_zero (t_value x)
 {
-if (Q_LGP21 || (cptr == NULL))
-    return SCPE_ARG;
-if (strcmp (cptr, "TTO") == 0)
-    uptr->flags = uptr->flags & ~UNIT_OUTPT;
-else if (strcmp (cptr, "PTP") == 0)
-    uptr->flags = uptr->flags | UNIT_OUTPT;
-else return SCPE_ARG;
-return SCPE_OK;
+	x &= ~(TAG | SIGN);
+	return (x == 0);
 }
 
-/* Set CPU to LGP21 or LPG30 */
-
-t_stat cpu_set_model (UNIT *uptr, int32 val, char *cptr, void *desc)
+/*
+ * Нормализация числа (влево).
+ */
+t_value normalize (t_value x)
 {
-if (val)
-    uptr->flags = uptr->flags & ~(UNIT_IN4B|UNIT_INPT|UNIT_OUTPT);
-return reset_all (0);
+	int exp;
+	t_value m;
+
+	exp = x >> 36 & 0177;
+	m = x & MANTISSA;
+	if (m == 0) {
+zero:		/* Нулевая мантисса, превращаем в ноль. */
+		return x & TAG;
+	}
+	for (;;) {
+		if (m & 0400000000000LL)
+			break;
+		m <<= 1;
+		--exp;
+		if (exp < 0)
+			goto zero;
+	}
+	x &= TAG | SIGN;
+	x |= (t_value) exp << 36 | m;
+	return x;
 }
 
-/* Show CPU type and all options */
-
-t_stat cpu_show_model (FILE *st, UNIT *uptr, int32 val, void *desc)
+/*
+ * Сложение двух чисел, с блокировкой округления и нормализации,
+ * если требуется.
+ */
+t_stat addition (t_value *result, t_value x, t_value y, int no_round, int no_norm)
 {
-fputs (Q_LGP21? "LGP-21": "LGP-30", st);
-if (uptr->flags & UNIT_TTSS_D)
-    fputs (", track/sector", st);
-if (uptr->flags & UNIT_LGPH_D)
-    fputs (", LGP hex", st);
-fputs (Q_MANI? ", manual": ", tape", st);
-if (!Q_LGP21) {
-    fputs (Q_IN4B? ", 4b": ", 6b", st);
-    fputs (Q_INPT? ", in=PTR": ", in=TTI", st);
-    fputs (Q_OUTPT? ", out=PTP": ", out=TTO", st);
-    }
-return SCPE_OK;
+	int xexp, yexp, rexp;
+	t_value xm, ym, r;
+
+	if (is_zero (x)) {
+		if (! no_norm)
+			y = normalize (y);
+		*result = y | (x & TAG);
+		return 0;
+	}
+	if (is_zero (y)) {
+zero_y:		if (! no_norm)
+			x = normalize (x);
+		*result = x | (y & TAG);
+		return 0;
+	}
+	/* Извлечем порядок чисел. */
+	xexp = x >> 36 & 0177;
+	yexp = y >> 36 & 0177;
+	if (yexp > xexp) {
+		/* Пусть x - большее, а y - меньшее число (по модулю). */
+		t_value t = x;
+		int texp = xexp;
+		x = y;
+		xexp = yexp;
+		y = t;
+		yexp = texp;
+	}
+	if (xexp - yexp >= 36) {
+		/* Пренебрежимо малое слагаемое. */
+		goto zero_y;
+	}
+	/* Извлечем мантиссу чисел. */
+	xm = x & MANTISSA;
+	ym = (y & MANTISSA) >> (xexp - yexp);
+
+	/* Сложим. */
+	rexp = xexp;
+	if ((x ^ y) & SIGN) {
+		/* Противоположные знаки. */
+		r = xm - ym;
+		if (r & SIGN) {
+			r = -r;
+			r |= SIGN;
+		}
+	} else {
+		/* Числа одного знака. */
+		r = xm + ym;
+		if (r >> 36) {
+			/* Выход за 36 разрядов, нормализация вправо. */
+			if (! no_round) {
+				/* Округление. */
+				r += 1;
+			}
+			r >>= 1;
+			++rexp;
+			if (rexp > 127) {
+				/* переполнение при сложении */
+				return STOP_ADDOVF;
+			}
+		}
+	}
+
+	/* Конструируем результат. */
+	r |= (t_value) rexp << 36;
+	r ^= (x & SIGN);
+	if (! no_norm)
+		r = normalize (r);
+	*result = r | ((x | y) & TAG);
+	return 0;
 }
 
-/* Memory examine */
-
-t_stat cpu_ex (t_value *vptr, t_addr addr, UNIT *uptr, int32 sw)
+/*
+ * Коррекция порядка.
+ */
+t_stat add_exponent (t_value *result, t_value x, int n)
 {
-if (addr >= MEMSIZE)
-    return SCPE_NXM;
-if (vptr != NULL)
-    *vptr = Read (addr);
-return SCPE_OK;
+	int exp;
+
+	exp = (int) (x >> 36 & 0177) + n;
+	if (exp > 127) {
+		/* переполнение при сложении порядков */
+		return STOP_EXPOVF;
+	}
+	if (exp < 0 || (x & MANTISSA) == 0) {
+		/* Ноль. */
+		x &= TAG;
+	}
+	*result = x;
+	return 0;
 }
 
-/* Memory deposit */
-
-t_stat cpu_dep (t_value val, t_addr addr, UNIT *uptr, int32 sw)
+/*
+ * Умножение двух 36-битовых целых чисел, с выдачей двух половин результата.
+ */
+void mul36x36 (t_value x, t_value y, t_value *hi, t_value *lo)
 {
-if (addr >= MEMSIZE)
-    return SCPE_NXM;
-Write (addr, val);
-return SCPE_OK;
+	int yhi, ylo;
+	t_value rhi, rlo;
+
+	/* Разбиваем второй множитель на де половины. */
+	yhi = y >> 18;
+	ylo = y & 0777777;
+
+	/* Частичные 54-битовые произведения. */
+	rhi = x * yhi;
+	rlo = x * ylo;
+
+	/* Составляем результат. */
+	rhi += rlo >> 18;
+	*hi = rhi >> 18;
+	*lo = (rhi & 0777777) << 18 | (rlo & 0777777);
 }
 
-/* Execute */
-
-t_stat cpu_set_exec (UNIT *uptr, int32 val, char *cptr, void *desc)
+/*
+ * Умножение двух чисел, с блокировкой округления и нормализации,
+ * если требуется.
+ */
+t_stat multiplication (t_value *result, t_value x, t_value y, int no_round, int no_norm)
 {
-uint32 inst;
-t_stat r;
+	int xexp, yexp, rexp;
+	t_value xm, ym, r;
 
-if (cptr) {
-    inst = get_uint (cptr, 16, DMASK, &r);
-    if (r != SCPE_OK)
-        return r;
-    }
-else inst = IR;
-while ((r = cpu_one_inst (PC, inst)) == STOP_STALL) {
-    sim_interval = 0;
-    if (r = sim_process_event ())
-        return r;
-    }
-return r;
+	/* Извлечем порядок чисел. */
+	xexp = x >> 36 & 0177;
+	yexp = y >> 36 & 0177;
+
+	/* Извлечем мантиссу чисел. */
+	xm = x & MANTISSA;
+	ym = y & MANTISSA;
+
+	/* Умножим. */
+	rexp = xexp + yexp - 64;
+	mul36x36 (xm, ym, &r, &RMR);
+
+	if (! no_norm && ! (r & 0400000000000LL)) {
+		/* Нормализация на один разряд влево. */
+		--rexp;
+		r <<= 1;
+		RMR <<= 1;
+		if (RMR & BIT37) {
+			r |= 1;
+			RMR &= MANTISSA;
+		}
+	} else if (! no_round) {
+		/* Округление. */
+		if (RMR & 0400000000000LL) {
+			r += 1;
+		}
+	}
+	if (r == 0 || rexp < 0) {
+		/* Нуль. */
+		*result = (x | y) & TAG;
+		return 0;
+	}
+	if (rexp > 127) {
+		/* переполнение при умножении */
+		return STOP_MULOVF;
+	}
+
+	/* Конструируем результат. */
+	r |= (t_value) rexp << 36;
+	r |= ((x ^ y) & SIGN) | ((x | y) & TAG);
+	RMR |= (t_value) rexp << 36;
+	RMR |= ((x ^ y) & SIGN) | ((x | y) & TAG);
+	*result = r;
+	return 0;
 }
 
-/* Fill */
-
-t_stat cpu_set_fill (UNIT *uptr, int32 val, char *cptr, void *desc)
+/*
+ * Деление двух чисел, с блокировкой округления, если требуется.
+ */
+t_value division (t_value x, t_value y, int no_round)
 {
-uint32 inst;
-t_stat r;
+	int xexp, yexp, rexp;
+	t_value xm, ym, r;
 
-if (cptr) {
-    inst = get_uint (cptr, 16, DMASK, &r);
-    if (r != SCPE_OK)
-        return r;
-    IR = inst;
-    }
-else IR = A;
-return SCPE_OK;
+	/* Извлечем порядок чисел. */
+	xexp = x >> 36 & 0177;
+	yexp = y >> 36 & 0177;
+
+	/* Извлечем мантиссу чисел. */
+	xm = x & MANTISSA;
+	ym = y & MANTISSA;
+	if (xm >= 2*ym)
+		uerror ("переполнение мантиссы при делении");
+
+	/* Поделим. */
+	rexp = xexp - yexp + 64;
+	r = (double) xm / ym * BIT37;
+	if (r >> 36) {
+		/* Выход за 36 разрядов, нормализация вправо. */
+		if (! no_round) {
+			/* Округление. */
+			r += 1;
+		}
+		r >>= 1;
+		++rexp;
+	}
+	if (r == 0 || rexp < 0) {
+		/* Нуль. */
+		return (x | y) & TAG;
+	}
+	if (rexp > 127)
+		uerror ("переполнение при сложении");
+
+	/* Конструируем результат. */
+	r |= (t_value) rexp << 36;
+	r |= ((x ^ y) & SIGN) | ((x | y) & TAG);
+	return r;
 }
-#endif
+
+/*
+ * Вычисление квадратного корня, с блокировкой округления, если требуется.
+ */
+t_value square_root (t_value x, int no_round)
+{
+	int exp;
+	t_value r;
+	double q;
+
+	if (x & SIGN)
+		uerror ("корень из отрицательного числа");
+
+	/* Извлечем порядок числа. */
+	exp = x >> 36 & 0177;
+
+	/* Извлечем мантиссу чисел. */
+	r = x & MANTISSA;
+
+	/* Вычисляем корень. */
+	if (exp & 1) {
+		/* Нечетный порядок. */
+		r >>= 1;
+	}
+	exp = (exp >> 1) + 32;
+	q = sqrt ((double) r) * BIT19;
+	r = (t_value) q;
+	if (! no_round) {
+		/* Смотрим остаток. */
+		if (q - r >= 0.5) {
+			/* Округление. */
+			r += 1;
+		}
+	}
+	if (r == 0) {
+		/* Нуль. */
+		return x & TAG;
+	}
+	if (r & ~MANTISSA)
+		uerror ("ошибка квадратного корня");
+
+	/* Конструируем результат. */
+	r |= (t_value) exp << 36;
+	r |= x & TAG;
+	return r;
+}
+
+/*
+ * Подсчет контрольной суммы, как в команде СЛЦ.
+ */
+t_value compute_checksum (t_value x, t_value y)
+{
+	t_value sum;
+
+	sum = (x & ~MANTISSA) + (y & ~MANTISSA);
+	if (sum & BIT46)
+		sum += BIT37;
+	y = (x & MANTISSA) + (y & MANTISSA);
+	if (y & BIT37)
+		y += 1;
+	return (sum & ~MANTISSA) | (y & MANTISSA);
+}
+
+/*
+ * Создаём образ барабана размером 040000 слов.
+ */
+void drum_create (char *drum_file)
+{
+	t_value w;
+	int fd, i;
+
+	fd = open (drum_file, O_RDWR | O_CREAT, 0664);
+	if (fd < 0)
+		return;
+	w = ~0LL;
+	for (i=0; i<040000; ++i)
+		write (fd, &w, 8);
+	close (fd);
+}
+
+/*
+ * Открываем файл с образом барабана.
+ */
+int drum_open ()
+{
+	char *drum_file;
+	int fd;
+
+	drum_file = getenv ("M20_DRUM");
+	if (! drum_file) {
+		char *home;
+
+		home = getenv ("HOME");
+		if (! home)
+			home = "";
+		drum_file = malloc (strlen(home) + 20);
+		if (! drum_file)
+			uerror ("мало памяти");
+		strcpy (drum_file, home);
+		strcat (drum_file, "/.m20");
+		mkdir (drum_file, 0775);
+		strcat (drum_file, "/drum.bin");
+	}
+	fd = open (drum_file, O_RDWR);
+	if (fd < 0) {
+		drum_create (drum_file);
+		fd = open (drum_file, O_RDWR);
+		if (fd < 0)
+			uerror ("не могу создать %s", drum_file);
+	}
+	return fd;
+}
+
+/*
+ * Запись на барабан.
+ * Если параметр sum ненулевой, посчитываем и кладём туда контрольную
+ * сумму массива. Также запмсываем сумму в слово last+1 на барабане.
+ */
+void drum_write (int addr, int first, int last, t_value *sum)
+{
+	int len, i;
+
+	lseek (drum, addr * 8L, 0);
+	len = (last - first + 1) * 8;
+	if (len <= 0 || len > (040000 - addr) * 8)
+		uerror ("неверная длина записи на МБ: %d байт", len);
+	if (write (drum, &M [first], len) != len)
+		uerror ("ошибка записи на МБ: %d байт", len);
+	if (! sum)
+		return;
+
+	/* Подсчитываем и записываем контрольную сумму. */
+	*sum = 0;
+	for (i=first; i<=last; ++i)
+		*sum = compute_checksum (*sum, M[i]);
+	write (drum, sum, 8);
+}
+
+int drum_read (int addr, int first, int last, t_value *sum)
+{
+	int len, i;
+	t_value old_sum;
+
+	lseek (drum, addr * 8L, 0);
+	len = (last - first + 1) * 8;
+	if (len <= 0 || len > (040000 - addr) * 8)
+		uerror ("неверная длина чтения МБ: %d байт", len);
+	if (read (drum, &M [first], len) != len)
+		uerror ("ошибка записи на МБ: %d байт", len);
+	for (i=first; i<=last; ++i) {
+		if (M[i] >> 45)
+			uerror ("чтение неинициализированного барабана %05o",
+				addr + i - first);
+	}
+	if (! sum)
+		return 0;
+
+	/* Считываем и проверяем контрольную сумму. */
+	read (drum, &old_sum, 8);
+	*sum = 0;
+	for (i=first; i<=last; ++i)
+		*sum = compute_checksum (*sum, M[i]);
+	return (old_sum == *sum);
+}
+
+double m20_to_ieee (t_value word)
+{
+	double d;
+	int exponent;
+
+	d = word & 0xfffffffffLL;
+	exponent = (word >> 36) & 0x7f;
+	d = ldexp (d, exponent - 64 - 36);
+	if ((word >> 43) & 1)
+		d = -d;
+	return d;
+}
+
+/*
+ * Печать десятичных чисел. Из книги Ляшенко:
+ * "В одной строке располагается информация из восьми ячеек памяти.
+ * Каждое десятичное число из ячейки занимает на бумаге 14 позиций,
+ * промежуток между числами занимает две позиции. В первых трёх
+ * позициях располагаются признак, знак числа, знак порядка.
+ * Минус в первой позиции означает, что число имеет признак."
+ */
+void print_decimal (int first, int last)
+{
+	int n;
+	t_value x;
+	double d;
+
+	/* Не будем бороться за совместимость, сделаем по-современному. */
+	for (n=0; ; ++n) {
+		x = load (first + n);
+		d = m20_to_ieee (x);
+		putchar (x & TAG ? '#' : ' ');
+		printf ("%13e", d);
+		if (first + n >= last) {
+			printf ("\n");
+			break;
+		}
+		printf ((n & 7) == 7 ? "\n" : "  ");
+	}
+}
+
+/*
+ * Печать восьмеричных чисел. Из книги Ляшенко:
+ * "В одной строке располагается информация из 8 ячеек памяти.
+ * Каждое число занимает 15 позиций с интервалом между числами
+ * в одну позицию."
+ */
+void print_octal (int first, int last)
+{
+	int n;
+	t_value x;
+
+	for (n=0; ; ++n) {
+		x = load (first + n);
+		printf ("%015llo", x);
+		if (first + n >= last) {
+			printf ("\n");
+			break;
+		}
+		printf ((n & 7) == 7 ? "\n" : " ");
+	}
+}
+
+/*
+ * Write Unicode symbol to file.
+ * Convert to UTF-8 encoding:
+ * 00000000.0xxxxxxx -> 0xxxxxxx
+ * 00000xxx.xxyyyyyy -> 110xxxxx, 10yyyyyy
+ * xxxxyyyy.yyzzzzzz -> 1110xxxx, 10yyyyyy, 10zzzzzz
+ */
+static void
+utf8_putc (unsigned ch, FILE *fout)
+{
+	static int initialized = 0;
+
+	if (ch < 0x80) {
+		putc (ch, fout);
+		return;
+	}
+	if (ch < 0x800) {
+		putc (ch >> 6 | 0xc0, fout);
+		putc ((ch & 0x3f) | 0x80, fout);
+		return;
+	}
+	putc (ch >> 12 | 0xe0, fout);
+	putc (((ch >> 6) & 0x3f) | 0x80, fout);
+	putc ((ch & 0x3f) | 0x80, fout);
+}
+
+/*
+ * Печать текстовых данных в кодировке ГОСТ.
+ */
+void print_text (int first, int last)
+{
+	int n, i, c;
+	t_value x;
+
+	/* GOST-10859 encoding.
+	 * Documentation: http://en.wikipedia.org/wiki/GOST_10859 */
+	static const unsigned short gost_to_unicode_cyr [128] = {
+/* 000-007 */	0x30,   0x31,   0x32,   0x33,   0x34,   0x35,   0x36,   0x37,
+/* 010-017 */	0x38,   0x39,   0x2b,   0x2d,   0x2f,   0x2c,   0x2e,   0x20,
+/* 020-027 */	0x65,   0x2191, 0x28,   0x29,   0xd7,   0x3d,   0x3b,   0x5b,
+/* 030-037 */	0x5d,   0x2a,   0x2018, 0x2019, 0x2260, 0x3c,   0x3e,   0x3a,
+/* 040-047 */	0x0410, 0x0411, 0x0412, 0x0413, 0x0414, 0x0415, 0x0416, 0x0417,
+/* 050-057 */	0x0418, 0x0419, 0x041a, 0x041b, 0x041c, 0x041d, 0x041e, 0x041f,
+/* 060-067 */	0x0420, 0x0421, 0x0422, 0x0423, 0x0424, 0x0425, 0x0426, 0x0427,
+/* 070-077 */	0x0428, 0x0429, 0x042b, 0x042c, 0x042d, 0x042e, 0x042f, 0x44,
+/* 100-107 */	0x46,   0x47,   0x49,   0x4a,   0x4c,   0x4e,   0x51,   0x52,
+/* 110-117 */	0x53,   0x55,   0x56,   0x57,   0x5a,   0x203e, 0x2264, 0x2265,
+/* 120-127 */	0x2228, 0x2227, 0x2283, 0xac,   0xf7,   0x2261, 0x25,   0x25c7,
+/* 130-137 */	0x7c,   0x2015, 0x5f,   0x21,   0x22,   0x042a, 0xb0,   0x2032,
+	};
+
+	for (n=0; ; ++n) {
+		x = load (first + n);
+		for (i=0; i<6; ++i) {
+			c = x >> (35 - 7*i) & 0177;
+			c = gost_to_unicode_cyr [c];
+			if (! c)
+				c = ' ';
+			/* Assume we have UTF-8 locale. */
+			utf8_putc (c, stdout);
+		}
+		if (first + n >= last) {
+			printf ("\n");
+			break;
+		}
+		if ((n & 127) == 127)
+			printf ("\n");
+	}
+}
+
+/*
+ * Подготовка обращения к внешнему устройству.
+ * В условном числе должен быть задан один из пяти видов работы:
+ * барабан, лента, разметка ленты, печать или перфорация.
+ */
+void ext_setup (int a1, int a2, int a3)
+{
+	ext_op = a1;
+	ext_disk_addr = a2;
+	ext_ram_finish = a3;
+
+	if (ext_op & EXT_WRITE) {
+		/* При записи проверка контрольной суммы не производится,
+		 * поэтому блокировка останова не имеет смысла. */
+		ext_op &= ~EXT_DIS_STOP;
+	}
+	if (ext_op & EXT_DRUM) {
+		/* Для барабана направление движения задавать не надо. */
+		ext_op &= ~EXT_TAPE_REV;
+		if (ext_op & (EXT_PUNCH | EXT_PRINT |
+		    EXT_TAPE_FORMAT | EXT_TAPE))
+			uerror ("неверное УЧ для обращения к барабану: %04o", ext_op);
+	}
+	if (ext_op & EXT_TAPE) {
+		if (ext_op & (EXT_PUNCH | EXT_PRINT | EXT_TAPE_FORMAT))
+			uerror ("неверное УЧ для обращения к ленте: %04o", ext_op);
+	}
+	if (ext_op & EXT_PRINT) {
+		/* При печати не имеют значения признаки записи и
+		 * обратного направления движения ленты. */
+		ext_op &= ~(EXT_WRITE | EXT_TAPE_REV);
+
+	} else if (ext_op & EXT_TAPE_FORMAT) {
+		/* При разметке ленты не имеют значения признаки записи,
+		 * блокировки останова и обратного направления движения. */
+		ext_op &= ~(EXT_WRITE | EXT_DIS_STOP | EXT_TAPE_REV);
+		if (ext_op & (EXT_PUNCH | EXT_PRINT | EXT_DIS_CHECK))
+			uerror ("неверное УЧ для разметки ленты: %04o", ext_op);
+	}
+	if (ext_op & EXT_PUNCH) {
+		/* При перфорации не имеют значения признаки записи,
+		 * блокировки останова и обратного направления движения. */
+		ext_op &= ~(EXT_WRITE | EXT_DIS_STOP | EXT_TAPE_REV);
+	}
+}
+
+/*
+ * Выполнение обращения к внешнему устройству.
+ * В случае ошибки возвращается 0.
+ * Контрольная сумма записи накапливается в параметре sum (не реализовано).
+ * Блокировка памяти (EXT_DIS_RAM) и блокировка контроля (EXT_DIS_CHECK)
+ * пока не поддерживаются.
+ */
+int ext_io (int a1, t_value *sum)
+{
+	ext_ram_start = a1;
+
+	*sum = 0;
+
+	if (ext_op & EXT_DRUM) {
+		/* Барабан */
+		if (ext_op & EXT_WRITE) {
+			drum_write ((ext_op & EXT_UNIT) << 12 | ext_disk_addr,
+				ext_ram_start, ext_ram_finish,
+				(ext_op & EXT_DIS_CHECK) ? 0 : sum);
+			return 1;
+		} else {
+			if (drum_read ((ext_op & EXT_UNIT) << 12 | ext_disk_addr,
+			    ext_ram_start, ext_ram_finish,
+			    (ext_op & EXT_DIS_CHECK) ? 0 : sum))
+				return 1;
+			if (! (ext_op & EXT_DIS_STOP))
+				uerror ("ошибка чтения барабана: %04o %04o %04o %04o",
+					ext_op, ext_disk_addr,
+					ext_ram_start, ext_ram_finish);
+			return 0;
+		}
+	} else if (ext_op & EXT_TAPE) {
+		/* Лента */
+		uerror ("работа с магнитной лентой не поддерживается");
+
+	} else if (ext_op & EXT_PRINT) {
+		/* Печать. Параметр EXT_PUNCH (накопление в буфере без выдачи)
+		 * пока не реализован. */
+		if (ext_op & EXT_DIS_STOP) {
+			/* Восьмеричная печать */
+			print_octal (ext_ram_start, ext_ram_finish);
+		} else if (ext_op & EXT_TAPE_FORMAT) {
+			/* Текстовая печать */
+			print_text (ext_ram_start, ext_ram_finish);
+		} else {
+			/* Десятичная печать */
+			print_decimal (ext_ram_start, ext_ram_finish);
+		}
+		return 1;
+
+	} else if (ext_op & EXT_PUNCH) {
+		uerror ("вывод на перфокарты не поддерживается");
+
+	} else if (ext_op & EXT_TAPE_FORMAT) {
+		/* Разметка ленты */
+		uerror ("разметка ленты не поддерживается");
+
+	} else
+		uerror ("неверное УЧ для инструкции МБ: %04o", ext_op);
+	return 0;
+}
+
+/*
+ * Execute one instruction, contained in register RK.
+ */
+t_stat cpu_one_inst ()
+{
+	int flags, op, a1, a2, a3, n = 0;
+	t_value x, y;
+	t_stat err;
+
+	flags = RK >> 42 & 7;
+	op = RK >> 36 & 077;
+	a1 = RK >> 24 & 07777;
+	a2 = RK >> 12 & 07777;
+	a3 = RK & 07777;
+
+	/* Есля установлен соответствующий бит признака,
+	 * к адресу добавляется значение регистра адреса. */
+	if (flags & 4)
+		a1 = (a1 + RA) & 07777;
+	if (flags & 2)
+		a2 = (a2 + RA) & 07777;
+	if (flags & 1)
+		a3 = (a3 + RA) & 07777;
+
+	switch (op) {
+	default:
+		return STOP_BADCMD;
+	/*
+	 * Логические операции.
+	 */
+	case 000: /* зп - пересылка */
+		RR = load (a1);
+		store (a3, RR);
+		/* Омега не изменяется. */
+		delay += 24;
+		break;
+	case 020: /* счп - чтение пультовых тумблеров */
+		switch (a1) {
+		case 0: RR = 0;    break;
+		case 1: RR = RPU1; break;
+		case 2: RR = RPU2; break;
+		case 3: RR = RPU3; break;
+		case 4: RR = RPU4; break;
+		case 5: /* RR */   break;
+		default: uerror ("неверный аргумент команды СЧП: %04o", a1);
+		}
+		store (a3, RR);
+		/* Омега не изменяется. */
+		delay += 24;
+		break;
+	case 015: /* нтж - поразрядное сравнение (исключающее или) */
+	case 035: /* нтжс - поразрядное сравнение с остановом */
+		RR = load (a1) ^ load (a2);
+logop:		store (a3, RR);
+		OMEGA = (RR == 0);
+		delay += 24;
+		if (op == 035 && ! OMEGA)
+			uerror ("останов по несовпадению: РР=%015llo", RR);
+		break;
+	case 055: /* и - логическое умножение (и) */
+		RR = load (a1) & load (a2);
+		goto logop;
+	case 075: /* или - логическое сложение (или) */
+		RR = load (a1) | load (a2);
+		goto logop;
+	case 013: /* слк - сложение команд */
+		x = load (a1);
+		y = (x & MANTISSA) + (load (a2) & MANTISSA);
+addm:		RR = (x & ~MANTISSA) | (y & MANTISSA);
+		store (a3, RR);
+		OMEGA = (y & BIT37) != 0;
+		delay += 24;
+		break;
+	case 033: /* вчк - вычитание команд */
+		x = load (a1);
+		y = (x & MANTISSA) - (load (a2) & MANTISSA);
+		goto addm;
+	case 053: /* слко - сложение кодов операций */
+		x = load (a1);
+		y = (x & ~MANTISSA) + (load (a2) & ~MANTISSA);
+addop:		RR = (x & MANTISSA) | (y & ~MANTISSA & WORD);
+		store (a3, RR);
+		OMEGA = (y & BIT46) != 0;
+		delay += 24;
+		break;
+	case 073: /* вчко - вычитание кодов операций */
+		x = load (a1);
+		y = (x & ~MANTISSA) - (load (a2) & ~MANTISSA);
+		goto addop;
+	case 014: /* сдма - сдвиг мантиссы по адресу */
+		n = (a1 & 0177) - 64;
+		delay += 61.5 + 1.5 * (n>0 ? n : -n);
+shm:		y = load (a2);
+		RR = (y & ~MANTISSA);
+		if (n > 0)
+			RR |= (y & MANTISSA) << n;
+		else if (n < 0)
+			RR |= (y & MANTISSA) >> -n;
+		store (a3, RR);
+		OMEGA = ((RR & MANTISSA) == 0);
+		break;
+	case 034: /* сдм - сдвиг мантиссы по порядку числа */
+		n = (int) (load (a1) >> 36 & 0177) - 64;
+		delay += 24 + 1.5 * (n>0 ? n : -n);
+		goto shm;
+	case 054: /* сда - сдвиг по адресу */
+		n = (a1 & 0177) - 64;
+		delay += 61.5 + 1.5 * (n>0 ? n : -n);
+shift:		RR = load (a2);
+		if (n > 0)
+			RR = (RR << n) & WORD;
+		else if (n < 0)
+			RR >>= -n;
+		store (a3, RR);
+		OMEGA = (RR == 0);
+		break;
+	case 074: /* сд - сдвиг по порядку числа */
+		n = (int) (load (a1) >> 36 & 0177) - 64;
+		delay += 24 + 1.5 * (n>0 ? n : -n);
+		goto shift;
+	case 007: /* слц - циклическое сложение */
+		x = load (a1);
+		y = load (a2);
+		RR = (x & ~MANTISSA) + (y & ~MANTISSA);
+		y = (x & MANTISSA) + (y & MANTISSA);
+csum:		if (RR & BIT46)
+			RR += BIT37;
+		if (y & BIT37)
+			y += 1;
+		RR &= WORD;
+		RR |= y & MANTISSA;
+		store (a3, RR);
+		OMEGA = (y & BIT37) != 0;
+		delay += 24;
+		break;
+	case 027: /* вчц - циклическое вычитание */
+		x = load (a1);
+		y = load (a2);
+		RR = (x & ~MANTISSA) - (y & ~MANTISSA);
+		y = (x & MANTISSA) - (y & MANTISSA);
+		goto csum;
+	case 067: /* сдц - циклический сдвиг */
+		x = load (a1);
+		RR = (x & 07777777) << 24 | (x >> 24 & 07777777);
+		store (a3, RR);
+		/* Омега не изменяется. */
+		delay += 60;
+		break;
+	/*
+	 * Операции управления.
+	 * Омега не изменяется.
+	 */
+	case 016: /* пв - передача управления с возвратом */
+		RR = 016000000000000LL | (a1 << 12);
+		store (a3, RR);
+		RVK = a2;
+		delay += 24;
+		break;
+	case 036: /* пе - передача управления по условию Ω=1 */
+		RR = load (a1);
+		store (a3, RR);
+		if (OMEGA)
+			RVK = a2;
+		delay += 24;
+		break;
+	case 056: /* пб - передача управления */
+		RR = load (a1);
+		store (a3, RR);
+		RVK = a2;
+		delay += 24;
+		break;
+	case 076: /* по - передача управления по условию Ω=0 */
+		RR = load (a1);
+		store (a3, RR);
+		if (! OMEGA)
+			RVK = a2;
+		delay += 24;
+		break;
+	case 077: /* стоп - останов машины */
+		RR = 0;
+		store (a3, RR);
+		delay += 24;
+		/* Если адреса равны 0, считаем что это штатная,
+		 * "хорошая" остановка.*/
+		if (a1 || a2)
+			uerror ("останов: A1=%04o, A2=%04o", a1, a2);
+		exit (0);
+		break;
+	case 011: /* цме - переход по < и Ω=1 */
+		if (RA < a1 && OMEGA)
+			RVK = a2;
+		RA = a3;
+		delay += 24;
+		break;
+	case 031: /* цбре - переход по >= и Ω=1 */
+		if (RA >= a1 && OMEGA)
+			RVK = a2;
+		RA = a3;
+		delay += 24;
+		break;
+	case 051: /* цмо - переход по < и Ω=0 */
+		if (RA < a1 && ! OMEGA)
+			RVK = a2;
+		RA = a3;
+		delay += 24;
+		break;
+	case 071: /* цбро - переход по >= и Ω=0 */
+		if (RA >= a1 && ! OMEGA)
+			RVK = a2;
+		RA = a3;
+		delay += 24;
+		break;
+	case 012: /* цм - переход по < */
+		if (RA < a1)
+			RVK = a2;
+		RA = a3;
+		delay += 24;
+		break;
+	case 032: /* цбр - переход по >= */
+		if (RA >= a1)
+			RVK = a2;
+		RA = a3;
+		delay += 24;
+		break;
+	case 052: /* раа - установка регистра адреса адресом */
+		RR = 052000000000000LL | (a1 << 12);
+		store (a3, RR);
+		RA = a2;
+		delay += 24;
+		break;
+	case 072: /* ра - установка регистра адреса числом */
+		RR = 052000000000000LL | (a1 << 12);
+		store (a3, RR);
+		RA = load (a2) >> 12 & 07777;
+		delay += 24;
+		break;
+	case 010: /* вп - ввод с перфокарт */
+	case 030: /* впбк - ввод с перфокарт без проверки к.суммы */
+		uerror ("ввод с перфокарт не поддерживается");
+		break;
+	case 050: /* ма - подготовка обращения к внешнему устройству */
+		ext_setup (a1, a2, a3);
+		delay += 24;
+		return 0;
+	case 070: /* мб - выполнение обращения к внешнему устройству */
+		if (ext_op == 07777)
+			uerror ("команда МБ не работает без МА");
+		if (! ext_io (a1, &RR) && a2)
+			RVK = a2;
+		if ((ext_op & EXT_WRITE) && ! (ext_op & EXT_DIS_CHECK))
+			store (a3, RR);
+		delay += 24;
+		break;
+	/*
+	 * Арифметические операции.
+	 */
+	case 001: /* сл - сложение с округлением и нормализацией */
+	case 021: /* слбо - сложение без округления с нормализацией */
+	case 041: /* слбн - сложение с округлением без нормализации */
+	case 061: /* слбно - сложение без округления и без нормализации */
+		x = load (a1);
+		y = load (a2);
+add:		err = addition (&RR, x, y, op >> 4 & 1, op >> 5 & 1);
+		if (err)
+			return err;
+		store (a3, RR);
+		OMEGA = (RR & SIGN) != 0;
+		delay += 29.5;
+		break;
+	case 002: /* вч - вычитание с округлением и нормализацией */
+	case 022: /* вчбо - вычитание без округления с нормализацией */
+	case 042: /* вчбн - вычитание с округлением без нормализации */
+	case 062: /* вчбно - вычитание без округления и без нормализации */
+		x = load (a1);
+		y = load (a2) ^ SIGN;
+		goto add;
+	case 003: /* вчм - вычитание модулей с округлением и нормализацией */
+	case 023: /* вчмбо - вычитание модулей без округления с нормализацией */
+	case 043: /* вчмбн - вычитание модулей с округлением без нормализации */
+	case 063: /* вчмбно - вычитание модулей без округления и без нормализации */
+		x = load (a1) & ~SIGN;
+		y = load (a2) | SIGN;
+		goto add;
+	case 005: /* умн - умножение с округлением и нормализацией */
+	case 025: /* умнбо - умножение без округления с нормализацией */
+	case 045: /* умнбн - умножение с округлением без нормализации */
+	case 065: /* умнбно - умножение без округления и без нормализации */
+		x = load (a1);
+		y = load (a2);
+		err = multiplication (&RR, x, y, op >> 4 & 1, op >> 5 & 1);
+		if (err)
+			return err;
+		store (a3, RR);
+		OMEGA = (int) (RR >> 36 & 0177) > 0100;
+		delay += 70;
+		break;
+	case 004: /* дел - деление с округлением */
+	case 024: /* делбо - деление без округления */
+		x = load (a1);
+		y = load (a2);
+		RR = division (x, y, op >> 4 & 1);
+		store (a3, RR);
+		OMEGA = (int) (RR >> 36 & 0177) > 0100;
+		delay += 136;
+		break;
+	case 044: /* кор - извлечение корня с округлением */
+	case 064: /* корбо - извлечение корня без округления */
+		x = load (a1);
+		RR = square_root (x, op >> 4 & 1);
+		store (a3, RR);
+		OMEGA = (int) (RR >> 36 & 0177) > 0100;
+		delay += 275;
+		break;
+	case 047: /* счмр - выдача младших разрядов произведения */
+		RR = RMR;
+		store (a3, RR);
+		OMEGA = (RR & MANTISSA) == 0;
+		delay += 24;
+		break;
+	case 006: /* слпа - сложение порядка с адресом */
+		n = (a1 & 0177) - 64;
+		y = load (a2);
+addexp:		err = add_exponent (&RR, y, n);
+		if (err)
+			return err;
+		store (a3, RR);
+		OMEGA = (int) (RR >> 36 & 0177) > 0100;
+		delay += 61.5;
+		break;
+	case 026: /* слп - сложение порядков чисел */
+		x = load (a2);
+		n = (int) (x >> 36 & 0177) - 64;
+		y = load (a2) | (x & TAG);
+		goto addexp;
+	case 046: /* вчпа - вычитание адреса из порядка */
+		n = 64 - (a1 & 0177);
+		y = load (a2);
+		goto addexp;
+	case 066: /* вчп - вычитание порядков чисел */
+		x = load (a2);
+		n = 64 - (int) (x >> 36 & 0177);
+		y = load (a2) | (x & TAG);
+		goto addexp;
+	}
+	ext_op = 07777;
+	return 0;
+}
+
+/*
+ * Main instruction fetch/decode loop
+ */
+t_stat sim_instr (void)
+{
+	t_stat r;
+	uint32 oRVK;
+
+	/* Restore register state */
+	RVK = RVK & 07777;				/* mask RVK */
+	sim_cancel_step ();				/* defang SCP step */
+
+	/* Main instruction fetch/decode loop */
+	for (;;) {
+		if (sim_interval <= 0) {		/* check clock queue */
+			r = sim_process_event ();
+			if (r)
+				return r;
+		}
+
+		if (delay > 0) {			/* delay to next instr */
+			delay = delay - 1;		/* count down delay */
+			sim_interval = sim_interval - 1;
+			continue;			/* skip execution */
+		}
+
+		if (RVK >= MEMSIZE) {			/* выход за пределы памяти */
+			return STOP_RUNOUT;		/* stop simulation */
+		}
+
+		if (sim_brk_summ &&			/* breakpoint? */
+		    sim_brk_test (RVK, SWMASK ('E'))) {
+			return STOP_IBKPT;		/* stop simulation */
+		}
+
+		oRVK = RVK;
+		RK = M [RVK];				/* get instruction */
+		RVK = RVK + 1;				/* increment RVK */
+		sim_interval = sim_interval - 1;
+
+		r = cpu_one_inst ();
+		if (r)					/* one instr; error? */
+			return r;
+
+		if (sim_step && (--sim_step <= 0))	/* do step count */
+			return SCPE_STOP;
+	}
+}
