@@ -86,6 +86,26 @@ const char *sim_stop_messages[] = {
 	"Переполнение при сложении",			/* Addition overflow */
 	"Переполнение при сложении порядков",		/* Exponent overflow */
 	"Переполнение при умножении",			/* Multiplication overflow */
+	"Переполнение при делении",			/* Division overflow */
+	"Переполнение мантиссы при делении",		/* Division mantissa overflow */
+	"Корень из отрицательного числа",		/* SQRT from negative number */
+	"Ошибка вычисления корня",			/* SQRT error */
+	"Ошибка чтения барабана",			/* Drum read error */
+	"Неверная длина чтения барабана",		/* Invalid drum read length */
+	"Неверная длина записи барабана",		/* Invalid drum write length */
+	"Ошибка записи барабана",			/* Drum write error */
+	"Неверное УЧ для обращения к барабану", 	/* Invalid drum control word */
+	"Чтение неинициализированного барабана", 	/* Reading uninialized drum data */
+	"Неверное УЧ для обращения к ленте",		/* Invalid tape control word */
+	"Неверное УЧ для разметки ленты",		/* Invalid tape format word */
+	"Обмен с магнитной лентой не реализован",	/* Tape not implemented */
+	"Разметка магнитной ленты не реализована",	/* Tape formatting not implemented */
+	"Вывод на перфокарты не реализован",		/* Punch not implemented */
+	"Ввод с перфокарт не реализован",		/* Punch reader not implemented */
+	"Неверное УЧ",					/* Invalid control word */
+	"Неверный аргумент команды",			/* Invalid argument of instruction */
+	"Останов по несовпадению",			/* Assertion failed */
+	"Команда МБ не работает без МА",		/* MB instruction without MA */
 };
 
 /* Параметры обмена с внешним устройством. */
@@ -119,6 +139,53 @@ t_stat cpu_deposit (t_value val, t_addr addr, UNIT *uptr, int32 sw)
 }
 
 /*
+ * Открываем файл с образом барабана.
+ */
+int drum_open ()
+{
+	char *drum_file;
+	int fd, i;
+	t_value w;
+
+	drum_file = getenv ("M20_DRUM");
+	if (! drum_file) {
+		char *home;
+
+		home = getenv ("HOME");
+		if (! home)
+			home = "";
+		drum_file = malloc (strlen(home) + 20);
+		if (! drum_file) {
+			perror ("drum_open");
+			exit (-1);
+		}
+		strcpy (drum_file, home);
+		strcat (drum_file, "/.m20");
+		mkdir (drum_file, 0775);
+		strcat (drum_file, "/drum.bin");
+	}
+	fd = open (drum_file, O_RDWR);
+	if (fd < 0) {
+		/* Создаём образ барабана размером 040000 слов. */
+		fd = open (drum_file, O_RDWR | O_CREAT, 0664);
+		if (fd < 0) {
+			perror (drum_file);
+			exit (-1);
+		}
+		w = ~0LL;
+		for (i=0; i<040000; ++i)
+			write (fd, &w, 8);
+		close (fd);
+		fd = open (drum_file, O_RDWR);
+		if (fd < 0) {
+			perror (drum_file);
+			exit (-1);
+		}
+	}
+	return fd;
+}
+
+/*
  * Reset routine
  */
 t_stat cpu_reset (DEVICE *dptr)
@@ -128,6 +195,8 @@ t_stat cpu_reset (DEVICE *dptr)
 	RMR = 0;
 	RR = 0;
 	sim_brk_types = sim_brk_dflt = SWMASK ('E');
+	if (drum <= 0)
+		drum = drum_open ();
 	return SCPE_OK;
 }
 
@@ -371,7 +440,7 @@ t_stat multiplication (t_value *result, t_value x, t_value y, int no_round, int 
 /*
  * Деление двух чисел, с блокировкой округления, если требуется.
  */
-t_value division (t_value x, t_value y, int no_round)
+t_stat division (t_value *result, t_value x, t_value y, int no_round)
 {
 	int xexp, yexp, rexp;
 	t_value xm, ym, r;
@@ -383,9 +452,10 @@ t_value division (t_value x, t_value y, int no_round)
 	/* Извлечем мантиссу чисел. */
 	xm = x & MANTISSA;
 	ym = y & MANTISSA;
-	if (xm >= 2*ym)
-		uerror ("переполнение мантиссы при делении");
-
+	if (xm >= 2*ym) {
+		/* переполнение мантиссы при делении */
+		return STOP_DIVMOVF;
+	}
 	/* Поделим. */
 	rexp = xexp - yexp + 64;
 	r = (double) xm / ym * BIT37;
@@ -400,28 +470,34 @@ t_value division (t_value x, t_value y, int no_round)
 	}
 	if (r == 0 || rexp < 0) {
 		/* Нуль. */
-		return (x | y) & TAG;
+		*result = (x | y) & TAG;
+		return 0;
 	}
-	if (rexp > 127)
-		uerror ("переполнение при сложении");
+	if (rexp > 127) {
+		/* переполнение при делении */
+		return STOP_DIVOVF;
+	}
 
 	/* Конструируем результат. */
 	r |= (t_value) rexp << 36;
 	r |= ((x ^ y) & SIGN) | ((x | y) & TAG);
-	return r;
+	*result = r;
+	return 0;
 }
 
 /*
  * Вычисление квадратного корня, с блокировкой округления, если требуется.
  */
-t_value square_root (t_value x, int no_round)
+t_stat square_root (t_value *result, t_value x, int no_round)
 {
 	int exp;
 	t_value r;
 	double q;
 
-	if (x & SIGN)
-		uerror ("корень из отрицательного числа");
+	if (x & SIGN) {
+		/* корень из отрицательного числа */
+		return STOP_NEGSQRT;
+	}
 
 	/* Извлечем порядок числа. */
 	exp = x >> 36 & 0177;
@@ -446,15 +522,19 @@ t_value square_root (t_value x, int no_round)
 	}
 	if (r == 0) {
 		/* Нуль. */
-		return x & TAG;
+		*result = x & TAG;
+		return 0;
 	}
-	if (r & ~MANTISSA)
-		uerror ("ошибка квадратного корня");
+	if (r & ~MANTISSA) {
+		/* ошибка квадратного корня */
+		return STOP_SQRTERR;
+	}
 
 	/* Конструируем результат. */
 	r |= (t_value) exp << 36;
 	r |= x & TAG;
-	return r;
+	*result = r;
+	return 0;
 }
 
 /*
@@ -474,95 +554,55 @@ t_value compute_checksum (t_value x, t_value y)
 }
 
 /*
- * Создаём образ барабана размером 040000 слов.
- */
-void drum_create (char *drum_file)
-{
-	t_value w;
-	int fd, i;
-
-	fd = open (drum_file, O_RDWR | O_CREAT, 0664);
-	if (fd < 0)
-		return;
-	w = ~0LL;
-	for (i=0; i<040000; ++i)
-		write (fd, &w, 8);
-	close (fd);
-}
-
-/*
- * Открываем файл с образом барабана.
- */
-int drum_open ()
-{
-	char *drum_file;
-	int fd;
-
-	drum_file = getenv ("M20_DRUM");
-	if (! drum_file) {
-		char *home;
-
-		home = getenv ("HOME");
-		if (! home)
-			home = "";
-		drum_file = malloc (strlen(home) + 20);
-		if (! drum_file)
-			uerror ("мало памяти");
-		strcpy (drum_file, home);
-		strcat (drum_file, "/.m20");
-		mkdir (drum_file, 0775);
-		strcat (drum_file, "/drum.bin");
-	}
-	fd = open (drum_file, O_RDWR);
-	if (fd < 0) {
-		drum_create (drum_file);
-		fd = open (drum_file, O_RDWR);
-		if (fd < 0)
-			uerror ("не могу создать %s", drum_file);
-	}
-	return fd;
-}
-
-/*
  * Запись на барабан.
  * Если параметр sum ненулевой, посчитываем и кладём туда контрольную
  * сумму массива. Также запмсываем сумму в слово last+1 на барабане.
  */
-void drum_write (int addr, int first, int last, t_value *sum)
+t_stat drum_write (int addr, int first, int last, t_value *sum)
 {
 	int len, i;
 
 	lseek (drum, addr * 8L, 0);
 	len = (last - first + 1) * 8;
-	if (len <= 0 || len > (040000 - addr) * 8)
-		uerror ("неверная длина записи на МБ: %d байт", len);
-	if (write (drum, &M [first], len) != len)
-		uerror ("ошибка записи на МБ: %d байт", len);
+	if (len <= 0 || len > (040000 - addr) * 8) {
+		/* неверная длина записи на МБ */
+		return STOP_BADWLEN;
+	}
+	if (write (drum, &M [first], len) != len) {
+		/* ошибка записи на МБ */
+		return STOP_WRERR;
+	}
 	if (! sum)
-		return;
+		return 0;
 
 	/* Подсчитываем и записываем контрольную сумму. */
 	*sum = 0;
 	for (i=first; i<=last; ++i)
 		*sum = compute_checksum (*sum, M[i]);
 	write (drum, sum, 8);
+	return 0;
 }
 
-int drum_read (int addr, int first, int last, t_value *sum)
+t_stat drum_read (int addr, int first, int last, t_value *sum)
 {
 	int len, i;
 	t_value old_sum;
 
 	lseek (drum, addr * 8L, 0);
 	len = (last - first + 1) * 8;
-	if (len <= 0 || len > (040000 - addr) * 8)
-		uerror ("неверная длина чтения МБ: %d байт", len);
-	if (read (drum, &M [first], len) != len)
-		uerror ("ошибка записи на МБ: %d байт", len);
+	if (len <= 0 || len > (040000 - addr) * 8) {
+		/* неверная длина чтения МБ */
+		return STOP_BADRLEN;
+	}
+	if (read (drum, &M [first], len) != len) {
+		/* ошибка чтения МБ */
+		return STOP_READERR;
+	}
 	for (i=first; i<=last; ++i) {
-		if (M[i] >> 45)
-			uerror ("чтение неинициализированного барабана %05o",
-				addr + i - first);
+		if (M[i] >> 45) {
+			/* чтение неинициализированного барабана */
+			return STOP_DRUMINVDATA;
+		}
 	}
 	if (! sum)
 		return 0;
@@ -572,7 +612,9 @@ int drum_read (int addr, int first, int last, t_value *sum)
 	*sum = 0;
 	for (i=first; i<=last; ++i)
 		*sum = compute_checksum (*sum, M[i]);
-	return (old_sum == *sum);
+	if (old_sum != *sum)
+		return STOP_READERR;
+	return 0;
 }
 
 double m20_to_ieee (t_value word)
@@ -713,7 +755,7 @@ void print_text (int first, int last)
  * В условном числе должен быть задан один из пяти видов работы:
  * барабан, лента, разметка ленты, печать или перфорация.
  */
-void ext_setup (int a1, int a2, int a3)
+t_stat ext_setup (int a1, int a2, int a3)
 {
 	ext_op = a1;
 	ext_disk_addr = a2;
@@ -728,12 +770,16 @@ void ext_setup (int a1, int a2, int a3)
 		/* Для барабана направление движения задавать не надо. */
 		ext_op &= ~EXT_TAPE_REV;
 		if (ext_op & (EXT_PUNCH | EXT_PRINT |
-		    EXT_TAPE_FORMAT | EXT_TAPE))
-			uerror ("неверное УЧ для обращения к барабану: %04o", ext_op);
+		    EXT_TAPE_FORMAT | EXT_TAPE)) {
+			/* неверное УЧ для обращения к барабану */
+			return STOP_DRUMINVAL;
+		}
 	}
 	if (ext_op & EXT_TAPE) {
-		if (ext_op & (EXT_PUNCH | EXT_PRINT | EXT_TAPE_FORMAT))
-			uerror ("неверное УЧ для обращения к ленте: %04o", ext_op);
+		if (ext_op & (EXT_PUNCH | EXT_PRINT | EXT_TAPE_FORMAT)) {
+			/* неверное УЧ для обращения к ленте */
+			return STOP_TAPEINVAL;
+		}
 	}
 	if (ext_op & EXT_PRINT) {
 		/* При печати не имеют значения признаки записи и
@@ -744,8 +790,10 @@ void ext_setup (int a1, int a2, int a3)
 		/* При разметке ленты не имеют значения признаки записи,
 		 * блокировки останова и обратного направления движения. */
 		ext_op &= ~(EXT_WRITE | EXT_DIS_STOP | EXT_TAPE_REV);
-		if (ext_op & (EXT_PUNCH | EXT_PRINT | EXT_DIS_CHECK))
-			uerror ("неверное УЧ для разметки ленты: %04o", ext_op);
+		if (ext_op & (EXT_PUNCH | EXT_PRINT | EXT_DIS_CHECK)) {
+			/* неверное УЧ для разметки ленты */
+			return STOP_TAPEFMTINVAL;
+		}
 	}
 	if (ext_op & EXT_PUNCH) {
 		/* При перфорации не имеют значения признаки записи,
@@ -756,12 +804,12 @@ void ext_setup (int a1, int a2, int a3)
 
 /*
  * Выполнение обращения к внешнему устройству.
- * В случае ошибки возвращается 0.
+ * В случае ошибки чтения возвращается STOP_READERR.
  * Контрольная сумма записи накапливается в параметре sum (не реализовано).
  * Блокировка памяти (EXT_DIS_RAM) и блокировка контроля (EXT_DIS_CHECK)
  * пока не поддерживаются.
  */
-int ext_io (int a1, t_value *sum)
+t_stat ext_io (int a1, t_value *sum)
 {
 	ext_ram_start = a1;
 
@@ -770,24 +818,18 @@ int ext_io (int a1, t_value *sum)
 	if (ext_op & EXT_DRUM) {
 		/* Барабан */
 		if (ext_op & EXT_WRITE) {
-			drum_write ((ext_op & EXT_UNIT) << 12 | ext_disk_addr,
+			return drum_write ((ext_op & EXT_UNIT) << 12 | ext_disk_addr,
 				ext_ram_start, ext_ram_finish,
 				(ext_op & EXT_DIS_CHECK) ? 0 : sum);
-			return 1;
 		} else {
-			if (drum_read ((ext_op & EXT_UNIT) << 12 | ext_disk_addr,
+			return drum_read ((ext_op & EXT_UNIT) << 12 | ext_disk_addr,
 			    ext_ram_start, ext_ram_finish,
-			    (ext_op & EXT_DIS_CHECK) ? 0 : sum))
-				return 1;
-			if (! (ext_op & EXT_DIS_STOP))
-				uerror ("ошибка чтения барабана: %04o %04o %04o %04o",
-					ext_op, ext_disk_addr,
-					ext_ram_start, ext_ram_finish);
-			return 0;
+			    (ext_op & EXT_DIS_CHECK) ? 0 : sum);
 		}
 	} else if (ext_op & EXT_TAPE) {
 		/* Лента */
-		uerror ("работа с магнитной лентой не поддерживается");
+		/* работа с магнитной лентой не поддерживается */
+		return STOP_TAPEUNSUPP;
 
 	} else if (ext_op & EXT_PRINT) {
 		/* Печать. Параметр EXT_PUNCH (накопление в буфере без выдачи)
@@ -802,17 +844,21 @@ int ext_io (int a1, t_value *sum)
 			/* Десятичная печать */
 			print_decimal (ext_ram_start, ext_ram_finish);
 		}
-		return 1;
+		return 0;
 
 	} else if (ext_op & EXT_PUNCH) {
-		uerror ("вывод на перфокарты не поддерживается");
+		/* вывод на перфокарты не поддерживается */
+		return STOP_PUNCHUNSUPP;
 
 	} else if (ext_op & EXT_TAPE_FORMAT) {
 		/* Разметка ленты */
-		uerror ("разметка ленты не поддерживается");
+		/* разметка ленты не поддерживается */
+		return STOP_TAPEFMTUNSUPP;
 
-	} else
-		uerror ("неверное УЧ для инструкции МБ: %04o", ext_op);
+	} else {
+		/* неверное УЧ для инструкции МБ */
+		return STOP_EXTINVAL;
+	}
 	return 0;
 }
 
@@ -860,7 +906,7 @@ t_stat cpu_one_inst ()
 		case 3: RR = RPU3; break;
 		case 4: RR = RPU4; break;
 		case 5: /* RR */   break;
-		default: uerror ("неверный аргумент команды СЧП: %04o", a1);
+		default: return STOP_INVARG; /* неверный аргумент команды СЧП */
 		}
 		store (a3, RR);
 		/* Омега не изменяется. */
@@ -873,7 +919,7 @@ logop:		store (a3, RR);
 		OMEGA = (RR == 0);
 		delay += 24;
 		if (op == 035 && ! OMEGA)
-			uerror ("останов по несовпадению: РР=%015llo", RR);
+			return STOP_ASSERT; /* останов по несовпадению */
 		break;
 	case 055: /* и - логическое умножение (и) */
 		RR = load (a1) & load (a2);
@@ -1000,10 +1046,7 @@ csum:		if (RR & BIT46)
 		delay += 24;
 		/* Если адреса равны 0, считаем что это штатная,
 		 * "хорошая" остановка.*/
-		if (a1 || a2)
-			uerror ("останов: A1=%04o, A2=%04o", a1, a2);
-		exit (0);
-		break;
+		return STOP_STOP;
 	case 011: /* цме - переход по < и Ω=1 */
 		if (RA < a1 && OMEGA)
 			RVK = a2;
@@ -1054,17 +1097,24 @@ csum:		if (RR & BIT46)
 		break;
 	case 010: /* вп - ввод с перфокарт */
 	case 030: /* впбк - ввод с перфокарт без проверки к.суммы */
-		uerror ("ввод с перфокарт не поддерживается");
-		break;
+		/* ввод с перфокарт не поддерживается */
+		return STOP_RPUNCHUNSUPP;
 	case 050: /* ма - подготовка обращения к внешнему устройству */
-		ext_setup (a1, a2, a3);
+		err = ext_setup (a1, a2, a3);
 		delay += 24;
 		return 0;
 	case 070: /* мб - выполнение обращения к внешнему устройству */
-		if (ext_op == 07777)
-			uerror ("команда МБ не работает без МА");
-		if (! ext_io (a1, &RR) && a2)
-			RVK = a2;
+		if (ext_op == 07777) {
+			return STOP_MBINVAL;
+		}
+		err = ext_io (a1, &RR);
+		if (err) {
+			if (err != STOP_READERR ||
+			    ! (ext_op & EXT_DIS_STOP))
+				return err;
+			if (a2)
+				RVK = a2;
+		}
 		if ((ext_op & EXT_WRITE) && ! (ext_op & EXT_DIS_CHECK))
 			store (a3, RR);
 		delay += 24;
@@ -1116,7 +1166,9 @@ add:		err = addition (&RR, x, y, op >> 4 & 1, op >> 5 & 1);
 	case 024: /* делбо - деление без округления */
 		x = load (a1);
 		y = load (a2);
-		RR = division (x, y, op >> 4 & 1);
+		err = division (&RR, x, y, op >> 4 & 1);
+		if (err)
+			return err;
 		store (a3, RR);
 		OMEGA = (int) (RR >> 36 & 0177) > 0100;
 		delay += 136;
@@ -1124,7 +1176,9 @@ add:		err = addition (&RR, x, y, op >> 4 & 1, op >> 5 & 1);
 	case 044: /* кор - извлечение корня с округлением */
 	case 064: /* корбо - извлечение корня без округления */
 		x = load (a1);
-		RR = square_root (x, op >> 4 & 1);
+		err = square_root (&RR, x, op >> 4 & 1);
+		if (err)
+			return err;
 		store (a3, RR);
 		OMEGA = (int) (RR >> 36 & 0177) > 0100;
 		delay += 275;
