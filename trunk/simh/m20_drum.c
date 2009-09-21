@@ -2,10 +2,16 @@
  * m20_drum.c: M-20 magnetic drum device
  *
  * Copyright (c) 2009, Serge Vakulenko
+ *
+ * All drum i/o is performed immediately.
+ * There is no interrupt system in M20.
+ * No real drum timing is implented.
  */
 #include "m20_defs.h"
 
-/* Параметры обмена с внешним устройством. */
+/*
+ * Параметры обмена с внешним устройством.
+ */
 int ext_op;			/* УЧ - условное число */
 int ext_disk_addr;		/* А_МЗУ - начальный адрес на барабане/ленте */
 int ext_ram_start;		/* α_МОЗУ - начальный адрес памяти */
@@ -101,10 +107,13 @@ t_stat drum_write (int addr, int first, int last, t_value *sum)
 	return 0;
 }
 
+/*
+ * Чтение с барабана.
+ */
 t_stat drum_read (int addr, int first, int last, t_value *sum)
 {
 	int nwords, i;
-	t_value w, old_sum;
+	t_value old_sum;
 
 	nwords = last - first + 1;
 	if (nwords <= 0 || nwords+addr > DRUM_SIZE) {
