@@ -255,7 +255,7 @@ SDS_OPT = -I ${SDSD}
 
 #M20D = M20
 M20D = .
-M20 = ${M20D}/m20_cpu.c ${M20D}/m20_stddev.c ${M20D}/m20_sys.c
+M20 = ${M20D}/m20_cpu.c ${M20D}/m20_drum.c ${M20D}/m20_sys.c
 M20_OPT = -I ${M20D} -DUSE_INT64
 
 #
