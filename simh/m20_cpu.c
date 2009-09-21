@@ -1,9 +1,37 @@
-/* m20_cpu.c: M20 CPU simulator
+/*
+ * m20_cpu.c: M-20 CPU simulator
  *
  * Copyright (c) 2009, Serge Vakulenko
+ *
+ * For more information about M-20 computer, visit sites:
+ *  - http://www.computer-museum.ru/english/m20.htm
+ *  - http://code.google.com/p/m20/
+ *  - http://ru.wikipedia.org/wiki/%D0%91%D0%AD%D0%A1%D0%9C
+ *
+ * M-20 was built using tubes. Later, several transistor-based
+ * machines were created, with the same architectore: БЭСМ-3М,
+ * БЭСМ-4, М-220, М-220М, М-222. All software compatible with M-20.
+ *
+ * Release notes for M-20/SIMH
+ * ~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ *  1) All addresses and data values are displayed in octal.
+ *  2) M-20 processor has no interrupt system.
+ *  3) Execution times are in microseconds.
+ *  4) Magnetic drum is a "DRUM" device.
+ *  5) Magnetic tape is not implemented.
+ *  6) Punch reader is not implemented.
+ *  7) Card puncher is not implemented.
+ *  8) Printer output is sent to console.
+ *  9) Square root instruction is performed using sqrt().
+ *     All other math is authentic.
+ * 10) Instruction mnemonics, register names and stop messages
+ *     are in Russian using UTF-8 encoding. It is assumed, that
+ *     user locale is UTF-8.
+ * 11) A lot of comments in Russian (UTF-8).
  */
 #include "m20_defs.h"
 #include <math.h>
+#include <float.h>
 #include <unistd.h>
 #include <fcntl.h>
 #include <sys/stat.h>
@@ -128,53 +156,6 @@ t_stat cpu_deposit (t_value val, t_addr addr, UNIT *uptr, int32 sw)
 		return SCPE_NXM;
 	M [addr] = val;
 	return SCPE_OK;
-}
-
-/*
- * Открываем файл с образом барабана.
- */
-int drum_open ()
-{
-	char *drum_file;
-	int fd, i;
-	t_value w;
-
-	drum_file = getenv ("M20_DRUM");
-	if (! drum_file) {
-		char *home;
-
-		home = getenv ("HOME");
-		if (! home)
-			home = "";
-		drum_file = malloc (strlen(home) + 20);
-		if (! drum_file) {
-			perror ("drum_open");
-			exit (-1);
-		}
-		strcpy (drum_file, home);
-		strcat (drum_file, "/.m20");
-		mkdir (drum_file, 0775);
-		strcat (drum_file, "/drum.bin");
-	}
-	fd = open (drum_file, O_RDWR);
-	if (fd < 0) {
-		/* Создаём образ барабана размером 040000 слов. */
-		fd = open (drum_file, O_RDWR | O_CREAT, 0664);
-		if (fd < 0) {
-			perror (drum_file);
-			exit (-1);
-		}
-		w = ~0LL;
-		for (i=0; i<040000; ++i)
-			write (fd, &w, 8);
-		close (fd);
-		fd = open (drum_file, O_RDWR);
-		if (fd < 0) {
-			perror (drum_file);
-			exit (-1);
-		}
-	}
-	return fd;
 }
 
 /*
@@ -600,8 +581,6 @@ void print_octal (int first, int last)
 static void
 utf8_putc (unsigned ch, FILE *fout)
 {
-	static int initialized = 0;
-
 	if (ch < 0x80) {
 		putc (ch, fout);
 		return;
@@ -710,6 +689,7 @@ t_stat ext_setup (int a1, int a2, int a3)
 		 * блокировки останова и обратного направления движения. */
 		ext_op &= ~(EXT_WRITE | EXT_DIS_STOP | EXT_TAPE_REV);
 	}
+	return 0;
 }
 
 /*
@@ -1010,6 +990,8 @@ csum:		if (RR & BIT46)
 		return STOP_RPUNCHUNSUPP;
 	case 050: /* ма - подготовка обращения к внешнему устройству */
 		err = ext_setup (a1, a2, a3);
+		if (err)
+			return err;
 		delay += 24;
 		return 0;
 	case 070: /* мб - выполнение обращения к внешнему устройству */
@@ -1133,7 +1115,6 @@ addexp:		err = add_exponent (&RR, y, n);
 t_stat sim_instr (void)
 {
 	t_stat r;
-	uint32 oRVK;
 
 	/* Restore register state */
 	RVK = RVK & 07777;				/* mask RVK */
@@ -1148,8 +1129,13 @@ t_stat sim_instr (void)
 		}
 
 		if (delay > 0) {			/* delay to next instr */
-			delay = delay - 1;		/* count down delay */
-			sim_interval = sim_interval - 1;
+			int n = 1 + delay - DBL_EPSILON;
+			if (n > sim_interval)
+				n = sim_interval;
+			if (n < 1)
+				n = 1;
+			delay -= n;			/* count down delay */
+			sim_interval -= n;
 			continue;			/* skip execution */
 		}
 
@@ -1162,10 +1148,9 @@ t_stat sim_instr (void)
 			return STOP_IBKPT;		/* stop simulation */
 		}
 
-		oRVK = RVK;
 		RK = M [RVK];				/* get instruction */
-		RVK = RVK + 1;				/* increment RVK */
-		sim_interval = sim_interval - 1;
+		RVK += 1;				/* increment RVK */
+		sim_interval -= 1;
 
 		r = cpu_one_inst ();
 		if (r)					/* one instr; error? */

@@ -2,6 +2,15 @@
  * m20_sys.c: M-20 simulator interface
  *
  * Copyright (c) 2009, Serge Vakulenko
+ *
+ * This file implements three essential functions:
+ *
+ * sim_load()   - loading and dumping memory and CPU state
+ *		  in a way, specific for M20 architecture
+ * fprint_sym() - print a machune instruction using
+ *  		  opcode mnemonic or in a digital format
+ * parse_sym()	- scan a string and build an instruction
+ *		  word from it
  */
 #include "m20_defs.h"
 #include <math.h>
@@ -275,8 +284,6 @@ void m20_fprint_cmd (FILE *of, t_value cmd)
 t_stat fprint_sym (FILE *of, t_addr addr, t_value *val,
 	UNIT *uptr, int32 sw)
 {
-	int32 i, c;
-	uint32 op, ea;
 	t_value cmd;
 
 	if (uptr && (uptr != &cpu_unit))		/* must be CPU */
@@ -379,7 +386,7 @@ t_stat parse_instruction (char *cptr, t_value *val, int32 sw)
  */
 t_stat parse_sym (char *cptr, t_addr addr, UNIT *uptr, t_value *val, int32 sw)
 {
-	int32 i, c;
+	int32 i;
 
 	if (uptr && (uptr != &cpu_unit))		/* must be CPU */
 		return SCPE_ARG;
