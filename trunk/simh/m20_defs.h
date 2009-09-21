@@ -93,4 +93,7 @@ extern int ext_ram_finish;	/* ω_МОЗУ - конечный адрес памя
  */
 t_stat drum (t_value *sum);
 
+t_stat fprint_sym (FILE *of, t_addr addr, t_value *val,
+	UNIT *uptr, int32 sw);
+
 #endif

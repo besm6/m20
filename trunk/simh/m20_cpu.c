@@ -78,7 +78,8 @@ DEVICE cpu_dev = {
 	"CPU", &cpu_unit, cpu_reg, cpu_mod,
 	1, 8, 12, 1, 8, 45,
 	&cpu_examine, &cpu_deposit, &cpu_reset,
-	NULL, NULL, NULL
+	NULL, NULL, NULL, NULL,
+	DEV_DEBUG
 };
 
 /*
@@ -96,7 +97,7 @@ char sim_name[] = "M-20";
 
 REG *sim_PC = &cpu_reg[0];
 
-int32 sim_emax = 1;
+int32 sim_emax = 1;	/* максимальное количество слов в машинной команде */
 
 DEVICE *sim_devices[] = {
 	&cpu_dev,
@@ -1149,6 +1150,12 @@ t_stat sim_instr (void)
 		}
 
 		RK = M [RVK];				/* get instruction */
+		if (cpu_dev.dctrl) {
+			/*printf ("*** (%.0f) %04o: ", sim_gtime(), RVK);*/
+			printf ("*** %04o: ", RVK);
+			fprint_sym (stdout, RVK, &RK, 0, SWMASK ('M'));
+			printf ("\r\n");
+		}
 		RVK += 1;				/* increment RVK */
 		sim_interval -= 1;
 
