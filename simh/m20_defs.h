@@ -11,7 +11,8 @@
 /*
  * Memory
  */
-#define MEMSIZE         4096			/* memory size */
+#define MEMSIZE		4096			/* memory size */
+#define DRUM_SIZE	040000			/* drum size */
 
 /*
  * Simulator stop codes
@@ -71,5 +72,25 @@ enum {
 #define EXT_DRUM	00010   /* 28 - Б - барабан */
 #define EXT_WRITE	00004   /* 27 - Зп - запись */
 #define EXT_UNIT	00003   /* 26,25 - номер барабана или ленты */
+
+extern uint32 sim_brk_types, sim_brk_dflt, sim_brk_summ; /* breakpoint info */
+extern int32 sim_interval, sim_step;
+
+extern UNIT cpu_unit;
+extern t_value M [MEMSIZE];
+extern uint32 RVK;
+extern DEVICE drum_dev;
+
+/* Параметры обмена с внешним устройством. */
+extern int ext_op;		/* УЧ - условное число */
+extern int ext_disk_addr;	/* А_МЗУ - начальный адрес на барабане/ленте */
+extern int ext_ram_start;	/* α_МОЗУ - начальный адрес памяти */
+extern int ext_ram_finish;	/* ω_МОЗУ - конечный адрес памяти */
+
+/*
+ * Выполнение обращения к барабану.
+ * Все параметры находятся в регистрах УЧ, А_МЗУ, α_МОЗУ, ω_МОЗУ.
+ */
+t_stat drum (t_value *sum);
 
 #endif

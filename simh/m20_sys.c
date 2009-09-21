@@ -6,10 +6,6 @@
 #include "m20_defs.h"
 #include <math.h>
 
-extern t_value M [MEMSIZE];
-extern uint32 RVK;
-extern UNIT cpu_unit;
-
 /*
  * Преобразование вещественного числа в формат М-20.
  *
@@ -214,28 +210,16 @@ int m20_instr_to_opcode (char *instr)
  */
 void m20_fprint_addr (FILE *of, int a, int flag)
 {
-	char buf [40], *p;
-
-	p = buf;
 	if (flag)
-		*p++ = '@';
+		putc ('@', of);
+
 	if (flag && a >= 07700) {
-		*p++ = '-';
-		a = (a ^ 07777) + 1;
-		if (a > 7)
-			sprintf (p, "%#o", a);
-		else
-			sprintf (p, "%o", a);
+		fprintf (of, "-%o", (a ^ 07777) + 1);
 	} else if (a) {
 		if (flag)
-			*p++ = '+';
-		if (a > 7)
-			sprintf (p, "%#o", a);
-		else
-			sprintf (p, "%o", a);
-	} else
-		*p = 0;
-	printf ("%7s", buf);
+			putc ('+', of);
+		fprintf (of, "%o", a);
+	}
 }
 
 /*

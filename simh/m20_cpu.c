@@ -13,9 +13,6 @@ uint32 RVK, RA, OMEGA;
 t_value RK, RR, RMR, RPU1, RPU2, RPU3, RPU4;
 double delay;
 
-extern uint32 sim_brk_types, sim_brk_dflt, sim_brk_summ; /* breakpoint info */
-extern int32 sim_interval, sim_step;
-
 t_stat cpu_examine (t_value *vptr, t_addr addr, UNIT *uptr, int32 sw);
 t_stat cpu_deposit (t_value val, t_addr addr, UNIT *uptr, int32 sw);
 t_stat cpu_reset (DEVICE *dptr);
@@ -42,6 +39,7 @@ REG cpu_reg[] = {
 	{ "РПУ2", &RPU2,  8, 45, 0, 1 },	/* регистр 2 пульта управления */
 	{ "РПУ3", &RPU3,  8, 45, 0, 1 },	/* регистр 3 пульта управления */
 	{ "РПУ4", &RPU4,  8, 45, 0, 1 },	/* регистр 4 пульта управления */
+	{ 0 }
 };
 
 MTAB cpu_mod[] = {
@@ -74,6 +72,7 @@ int32 sim_emax = 1;
 
 DEVICE *sim_devices[] = {
 	&cpu_dev,
+	&drum_dev,
 	NULL
 };
 
@@ -107,13 +106,6 @@ const char *sim_stop_messages[] = {
 	"Останов по несовпадению",			/* Assertion failed */
 	"Команда МБ не работает без МА",		/* MB instruction without MA */
 };
-
-/* Параметры обмена с внешним устройством. */
-int ext_op;			/* УЧ - условное число */
-int ext_disk_addr;		/* А_МЗУ - начальный адрес на барабане/ленте */
-int ext_ram_start;		/* α_МОЗУ - начальный адрес памяти */
-int ext_ram_finish;		/* ω_МОЗУ - конечный адрес памяти */
-int drum;			/* файл с образом барабана */
 
 /*
  * Memory examine
@@ -195,8 +187,6 @@ t_stat cpu_reset (DEVICE *dptr)
 	RMR = 0;
 	RR = 0;
 	sim_brk_types = sim_brk_dflt = SWMASK ('E');
-	if (drum <= 0)
-		drum = drum_open ();
 	return SCPE_OK;
 }
 
@@ -537,86 +527,6 @@ t_stat square_root (t_value *result, t_value x, int no_round)
 	return 0;
 }
 
-/*
- * Подсчет контрольной суммы, как в команде СЛЦ.
- */
-t_value compute_checksum (t_value x, t_value y)
-{
-	t_value sum;
-
-	sum = (x & ~MANTISSA) + (y & ~MANTISSA);
-	if (sum & BIT46)
-		sum += BIT37;
-	y = (x & MANTISSA) + (y & MANTISSA);
-	if (y & BIT37)
-		y += 1;
-	return (sum & ~MANTISSA) | (y & MANTISSA);
-}
-
-/*
- * Запись на барабан.
- * Если параметр sum ненулевой, посчитываем и кладём туда контрольную
- * сумму массива. Также запмсываем сумму в слово last+1 на барабане.
- */
-t_stat drum_write (int addr, int first, int last, t_value *sum)
-{
-	int len, i;
-
-	lseek (drum, addr * 8L, 0);
-	len = (last - first + 1) * 8;
-	if (len <= 0 || len > (040000 - addr) * 8) {
-		/* неверная длина записи на МБ */
-		return STOP_BADWLEN;
-	}
-	if (write (drum, &M [first], len) != len) {
-		/* ошибка записи на МБ */
-		return STOP_WRERR;
-	}
-	if (! sum)
-		return 0;
-
-	/* Подсчитываем и записываем контрольную сумму. */
-	*sum = 0;
-	for (i=first; i<=last; ++i)
-		*sum = compute_checksum (*sum, M[i]);
-	write (drum, sum, 8);
-	return 0;
-}
-
-t_stat drum_read (int addr, int first, int last, t_value *sum)
-{
-	int len, i;
-	t_value old_sum;
-
-	lseek (drum, addr * 8L, 0);
-	len = (last - first + 1) * 8;
-	if (len <= 0 || len > (040000 - addr) * 8) {
-		/* неверная длина чтения МБ */
-		return STOP_BADRLEN;
-	}
-	if (read (drum, &M [first], len) != len) {
-		/* ошибка чтения МБ */
-		return STOP_READERR;
-	}
-	for (i=first; i<=last; ++i) {
-		if (M[i] >> 45) {
-			/* чтение неинициализированного барабана */
-			return STOP_DRUMINVDATA;
-		}
-	}
-	if (! sum)
-		return 0;
-
-	/* Считываем и проверяем контрольную сумму. */
-	read (drum, &old_sum, 8);
-	*sum = 0;
-	for (i=first; i<=last; ++i)
-		*sum = compute_checksum (*sum, M[i]);
-	if (old_sum != *sum)
-		return STOP_READERR;
-	return 0;
-}
-
 double m20_to_ieee (t_value word)
 {
 	double d;
@@ -651,10 +561,10 @@ void print_decimal (int first, int last)
 		putchar (x & TAG ? '#' : ' ');
 		printf ("%13e", d);
 		if (first + n >= last) {
-			printf ("\n");
+			printf ("\r\n");
 			break;
 		}
-		printf ((n & 7) == 7 ? "\n" : "  ");
+		printf ((n & 7) == 7 ? "\r\n" : "  ");
 	}
 }
 
@@ -673,10 +583,10 @@ void print_octal (int first, int last)
 		x = load (first + n);
 		printf ("%015llo", x);
 		if (first + n >= last) {
-			printf ("\n");
+			printf ("\r\n");
 			break;
 		}
-		printf ((n & 7) == 7 ? "\n" : " ");
+		printf ((n & 7) == 7 ? "\r\n" : " ");
 	}
 }
 
@@ -742,11 +652,11 @@ void print_text (int first, int last)
 			utf8_putc (c, stdout);
 		}
 		if (first + n >= last) {
-			printf ("\n");
+			printf ("\r\n");
 			break;
 		}
 		if ((n & 127) == 127)
-			printf ("\n");
+			printf ("\r\n");
 	}
 }
 
@@ -817,7 +727,8 @@ t_stat ext_io (int a1, t_value *sum)
 
 	if (ext_op & EXT_DRUM) {
 		/* Барабан */
-		if (ext_op & EXT_WRITE) {
+		return drum (sum);
+		/*if (ext_op & EXT_WRITE) {
 			return drum_write ((ext_op & EXT_UNIT) << 12 | ext_disk_addr,
 				ext_ram_start, ext_ram_finish,
 				(ext_op & EXT_DIS_CHECK) ? 0 : sum);
@@ -825,10 +736,9 @@ t_stat ext_io (int a1, t_value *sum)
 			return drum_read ((ext_op & EXT_UNIT) << 12 | ext_disk_addr,
 			    ext_ram_start, ext_ram_finish,
 			    (ext_op & EXT_DIS_CHECK) ? 0 : sum);
-		}
+		}*/
 	} else if (ext_op & EXT_TAPE) {
-		/* Лента */
-		/* работа с магнитной лентой не поддерживается */
+		/* Работа с магнитной лентой не поддерживается */
 		return STOP_TAPEUNSUPP;
 
 	} else if (ext_op & EXT_PRINT) {
@@ -847,16 +757,15 @@ t_stat ext_io (int a1, t_value *sum)
 		return 0;
 
 	} else if (ext_op & EXT_PUNCH) {
-		/* вывод на перфокарты не поддерживается */
+		/* Вывод на перфокарты не поддерживается */
 		return STOP_PUNCHUNSUPP;
 
 	} else if (ext_op & EXT_TAPE_FORMAT) {
-		/* Разметка ленты */
-		/* разметка ленты не поддерживается */
+		/* Разметка ленты не поддерживается */
 		return STOP_TAPEFMTUNSUPP;
 
 	} else {
-		/* неверное УЧ для инструкции МБ */
+		/* Неверное УЧ для инструкции МБ */
 		return STOP_EXTINVAL;
 	}
 	return 0;
