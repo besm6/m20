@@ -1150,11 +1150,11 @@ t_stat sim_instr (void)
 		}
 
 		RK = M [RVK];				/* get instruction */
-		if (cpu_dev.dctrl) {
-			/*printf ("*** (%.0f) %04o: ", sim_gtime(), RVK);*/
-			printf ("*** %04o: ", RVK);
-			fprint_sym (stdout, RVK, &RK, 0, SWMASK ('M'));
-			printf ("\r\n");
+		if (sim_deb && cpu_dev.dctrl) {
+			/*fprintf (sim_deb, "*** (%.0f) %04o: ", sim_gtime(), RVK);*/
+			fprintf (sim_deb, "*** %04o: ", RVK);
+			fprint_sym (sim_deb, RVK, &RK, 0, SWMASK ('M'));
+			fprintf (sim_deb, "\r\n");
 		}
 		RVK += 1;				/* increment RVK */
 		sim_interval -= 1;
