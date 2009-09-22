@@ -1116,6 +1116,7 @@ addexp:		err = add_exponent (&RR, y, n);
 t_stat sim_instr (void)
 {
 	t_stat r;
+	int ticks;
 
 	/* Restore register state */
 	RVK = RVK & 07777;				/* mask RVK */
@@ -1127,17 +1128,6 @@ t_stat sim_instr (void)
 			r = sim_process_event ();
 			if (r)
 				return r;
-		}
-
-		if (delay > 0) {			/* delay to next instr */
-			int n = 1 + delay - DBL_EPSILON;
-			if (n > sim_interval)
-				n = sim_interval;
-			if (n < 1)
-				n = 1;
-			delay -= n;			/* count down delay */
-			sim_interval -= n;
-			continue;			/* skip execution */
 		}
 
 		if (RVK >= MEMSIZE) {			/* выход за пределы памяти */
@@ -1157,11 +1147,16 @@ t_stat sim_instr (void)
 			fprintf (sim_deb, "\n");
 		}
 		RVK += 1;				/* increment RVK */
-		sim_interval -= 1;
 
 		r = cpu_one_inst ();
 		if (r)					/* one instr; error? */
 			return r;
+
+		ticks = 1;
+		if (delay > 0)				/* delay to next instr */
+			ticks += delay - DBL_EPSILON;
+		delay -= ticks;				/* count down delay */
+		sim_interval -= ticks;
 
 		if (sim_step && (--sim_step <= 0))	/* do step count */
 			return SCPE_STOP;
