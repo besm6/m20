@@ -1154,7 +1154,7 @@ t_stat sim_instr (void)
 			/*fprintf (sim_deb, "*** (%.0f) %04o: ", sim_gtime(), RVK);*/
 			fprintf (sim_deb, "*** %04o: ", RVK);
 			fprint_sym (sim_deb, RVK, &RK, 0, SWMASK ('M'));
-			fprintf (sim_deb, "\r\n");
+			fprintf (sim_deb, "\n");
 		}
 		RVK += 1;				/* increment RVK */
 		sim_interval -= 1;
