@@ -93,8 +93,8 @@ t_stat drum_write (int addr, int first, int last, t_value *sum)
 		/* Неверная длина записи на МБ */
 		return STOP_BADWLEN;
 	}
-	if (drum_dev.dctrl)
-		printf ("*** запись МБ %05o память %04o-%04o\r\n",
+	if (sim_deb && drum_dev.dctrl)
+		fprintf (sim_deb, "*** запись МБ %05o память %04o-%04o\r\n",
 			addr, first, last);
 	fseek (drum_unit.fileref, addr*8, SEEK_SET);
 	fxwrite (&M[first], 8, nwords, drum_unit.fileref);
@@ -123,8 +123,8 @@ t_stat drum_read (int addr, int first, int last, t_value *sum)
 		/* Неверная длина чтения МБ */
 		return STOP_BADRLEN;
 	}
-	if (drum_dev.dctrl)
-		printf ("*** чтение МБ %05o память %04o-%04o\r\n",
+	if (sim_deb && drum_dev.dctrl)
+		fprintf (sim_deb, "*** чтение МБ %05o память %04o-%04o\r\n",
 			addr, first, last);
 	fseek (drum_unit.fileref, addr*8, SEEK_SET);
 	i = fxread (&M[first], 8, nwords, drum_unit.fileref);

@@ -75,6 +75,7 @@ enum {
 
 extern uint32 sim_brk_types, sim_brk_dflt, sim_brk_summ; /* breakpoint info */
 extern int32 sim_interval, sim_step;
+extern FILE *sim_deb;
 
 extern UNIT cpu_unit;
 extern t_value M [MEMSIZE];

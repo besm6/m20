@@ -248,24 +248,24 @@ void m20_fprint_cmd (FILE *of, t_value cmd)
 
 	if (! flags && ! a1 && ! a2 && ! a3) {
 		/* Команда без аргументов. */
-		printf ("%s", m);
+		fprintf (of, "%s", m);
 		return;
 	}
-	printf ("%s ", m);
+	fprintf (of, "%s ", m);
 	m20_fprint_addr (of, a1, flags & 4);
 	if (! (flags & 3) && ! a2 && ! a3) {
 		/* Нет аргументов 2 и 3. */
 		return;
 	}
 
-	printf (", ");
+	fprintf (of, ", ");
 	m20_fprint_addr (of, a2, flags & 2);
 	if (! (flags & 1) && ! a3) {
 		/* Нет аргумента 3. */
 		return;
 	}
 
-	printf (", ");
+	fprintf (of, ", ");
 	m20_fprint_addr (of, a3, flags & 1);
 }
 
