@@ -102,7 +102,7 @@ int32 sim_emax = 1;	/* максимальное количество слов в
 DEVICE *sim_devices[] = {
 	&cpu_dev,
 	&drum_dev,
-	NULL
+	0
 };
 
 const char *sim_stop_messages[] = {
@@ -143,7 +143,7 @@ t_stat cpu_examine (t_value *vptr, t_addr addr, UNIT *uptr, int32 sw)
 {
 	if (addr >= MEMSIZE)
 		return SCPE_NXM;
-	if (vptr != NULL)
+	if (vptr)
 		*vptr = M [addr];
 	return SCPE_OK;
 }
@@ -1121,6 +1121,7 @@ t_stat sim_instr (void)
 	/* Restore register state */
 	RVK = RVK & 07777;				/* mask RVK */
 	sim_cancel_step ();				/* defang SCP step */
+	delay = 0;
 
 	/* Main instruction fetch/decode loop */
 	for (;;) {
