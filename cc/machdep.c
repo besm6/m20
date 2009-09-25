@@ -676,12 +676,12 @@ void store (node_t *n, int op)
 	case 6:
 		switch (op) {
 		default:        error ("internal assignment error"); break;
-		case OP_ASSIGN: output (" зп 1,,%n;", n); break;
-		case OP_ADDASG: output (" сл %n,1,%n;", n, n); break;
-		case OP_SUBASG: output (" вч %n,1,%n;", n, n); break;
+		case OP_ASSIGN: output (" п 1,,%n;", n); break;
+		case OP_ADDASG: output (" с %n,1,%n;", n, n); break;
+		case OP_SUBASG: output (" в %n,1,%n;", n, n); break;
 		case OP_ANDASG: output (" и %n,1,%n;", n, n); break;
 		case OP_ORASG:  output (" или %n,1,%n;", n, n); break;
-		case OP_XORASG: output (" нтж %n,1,%n;", n, n); break;
+		case OP_XORASG: output (" н %n,1,%n;", n, n); break;
 		case OP_LSASG:
 			output (" xtr %n,A2; call ls1; atx %n;", n, n);
 			break;
@@ -689,10 +689,10 @@ void store (node_t *n, int op)
 			output (" xtr %n,A2; call rs1; atx %n;", n, n);
 			break;
 		case OP_MULASG:
-			output (" умн %n,1,%n;", n, n);
+			output (" у %n,1,%n;", n, n);
 			break;
 		case OP_DIVASG:
-			output (" дел %n,1,%n;", n, n);
+			output (" д %n,1,%n;", n, n);
 			break;
 		case OP_MODASG:
 			output (" atx A2; xtr %n,A1; call divmod11;", n);
@@ -733,7 +733,7 @@ void loadname (node_t *n)
 		output (" и %n,_биты_1_8,1;", n);
 		break;
 	case 6:
-		output (" зп %n,,1;", n);
+		output (" п %n,,1;", n);
 		break;
 	default:
 		error ("неверный размер переменной");
@@ -881,17 +881,17 @@ void printbinary (int op, int type, int ltype, node_t *arg, int target)
 	}
 	switch (op) {
 	case OP_SUB:            /* - */
-		if (arg->op == OP_NAME)       output (" вч 1,%n,1;", arg);
+		if (arg->op == OP_NAME)       output (" в 1,%n,1;", arg);
 		else if (arg->op == OP_CONST) output (" c-a %n;", arg);
 		else error ("bad subtraction");
 		break;
 	case OP_ADD:            /* + */
-		if (arg->op == OP_NAME)	      output (" сл %n,1,1;", arg);
+		if (arg->op == OP_NAME)	      output (" с %n,1,1;", arg);
 		else if (arg->op == OP_CONST) output (" a+c %n;", arg);
 		else error ("bad addition");
 		break;
 	case OP_MUL:            /* * */
-		if (arg->op == OP_NAME)       output (" умн %n,1,1;", arg);
+		if (arg->op == OP_NAME)       output (" у %n,1,1;", arg);
 		else if (arg->op == OP_CONST) output (" a*c %n; xtr PRODL,A0;", arg);
 		else error ("bad multiplication");
 		break;
@@ -1054,5 +1054,5 @@ nprint (n->right, 0);
  */
 void makecond (int sz)
 {
-	output (" нтж 1;");
+	output (" н 1;");
 }
