@@ -152,7 +152,7 @@ t_stat drum_read (int addr, int first, int last, t_value *sum)
  */
 t_stat drum (t_value *sum)
 {
-	if (drum_dev.flags & DEV_DIS) {
+	if ((drum_dev.flags & DEV_DIS) || ! drum_unit.fileref) {
 		/* Device not attached. */
 		return SCPE_UNATT;
 	}
