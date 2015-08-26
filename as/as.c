@@ -1,5 +1,5 @@
 /*
- * Fссемблер для ЭВМ М-20.
+ * Assembler for M-20 computer.
  * Copyright (GPL) 2008 Сергей Вакуленко <serge@vak.ru>
  */
 #include <stdlib.h>
