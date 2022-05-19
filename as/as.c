@@ -1,6 +1,6 @@
 /*
  * Assembler for M-20 computer.
- * Copyright (GPL) 2008 Сергей Вакуленко <serge@vak.ru>
+ * Copyright (GPL) 2008 Сергей Вакуленко <serge.vakulenko@gmail.com>
  */
 #include <stdlib.h>
 #include <string.h>

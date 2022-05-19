@@ -1,4 +1,4 @@
-; Пример 2 из http://vak.ru/doku.php/proj/besm/m20
+; Пример 2 из http://sergev.org/besm/m20
 ; Вычисление sin x = x - x3/3! + x5/5! - ...
 
 :0020			; Данные (a)

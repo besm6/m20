@@ -1,6 +1,6 @@
 /*
  * Функции работы с плавающей точкой ЭВМ М-20.
- * Copyright (GPL) 2008 Сергей Вакуленко <serge@vak.ru>
+ * Copyright (GPL) 2008 Сергей Вакуленко <serge.vakulenko@gmail.com>
  * Copyright (GPL) 2008 Леонид Брухис <leob@mailcom.com>
  */
 #include <stdlib.h>

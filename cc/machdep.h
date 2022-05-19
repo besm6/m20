@@ -1,6 +1,6 @@
 /*
  * Компилятор Си для ЭВМ М-20.
- * Copyright (GPL) 2008 Сергей Вакуленко <serge@vak.ru>
+ * Copyright (GPL) 2008 Сергей Вакуленко <serge.vakulenko@gmail.com>
  */
 #define ASM_TRUE        " зп _истина,,1;"
 #define ASM_FALSE       " зп 0,,1;"
